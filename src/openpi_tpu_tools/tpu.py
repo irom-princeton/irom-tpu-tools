@@ -351,17 +351,8 @@ class TPUManager:
 
     def list(self, version: Literal["v4", "v5", "v6"]) -> int:
         zone = self._zone_for(version)
-        rc = run_streaming(
-            [
-                "gcloud",
-                "compute",
-                "tpus",
-                "tpu-vm",
-                "list",
-                "--zone",
-                zone,
-            ]
-        )
+        project = self.env.tpu_project
+        rc = run_streaming(["gcloud", "compute", "tpus", "tpu-vm", "list", "--zone", zone, "--project", project])
         return rc
 
     def delete_by_name(self, version: Literal["v4", "v5", "v6"], name: str) -> int:
