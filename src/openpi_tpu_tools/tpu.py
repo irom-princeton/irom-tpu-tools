@@ -257,13 +257,13 @@ class TPUManager:
         cmd = (
             f"SESSION={shlex.quote(session)}; "
             'LOG_FILE="$(tmux show-environment -t "$SESSION" LOG 2>/dev/null | sed -n "s/^LOG=//p")"; '
-            '[ -n "$LOG_FILE" ] && [ -f "$LOG_FILE" ] && { tail -n 200 -f "$LOG_FILE"; exit $?; }; '
+            '[ -n "$LOG_FILE" ] && [ -f "$LOG_FILE" ] && { tail -n 1000 -f "$LOG_FILE"; exit $?; }; '
             'LOG_DIR="${LOG_FILE%/*}"; '
             f'[ -n "$LOG_DIR" ] || LOG_DIR=$HOME/{self.env.gh_repo_name}/logs; '
             'test -d "$LOG_DIR" || { echo "[ERROR] Logs dir not found: $LOG_DIR"; exit 1; }; '
             'F="$(ls -1t "$LOG_DIR" | head -n1 || true)"; '
             '[ -n "$F" ] || { echo "[ERROR] No log files in $LOG_DIR"; exit 1; }; '
-            'tail -n 200 -f "$LOG_DIR/$F"'
+            'tail -n 1000 -f "$LOG_DIR/$F"'
         )
         rc = gcloud_tpu_ssh_stream(
             tpu_name=self.env.tpu_name,
