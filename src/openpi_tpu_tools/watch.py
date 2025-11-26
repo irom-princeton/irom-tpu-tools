@@ -29,6 +29,7 @@ class WatchConfig:
     version: str  # v4/v5/v6
     force_run: bool
     tpu_num: int
+    branch: str
     extra_args: list[str]
 
 
@@ -175,6 +176,7 @@ def watch_and_run(cfg: WatchConfig, env: TPUEnvConfig) -> None:
     print(f"  TPU Num: {cfg.tpu_num}")
     if cfg.version == "v4":
         print(f"  Topology: {_map_v4_topology(cfg.tpu_num)}")
+    print(f"  Branch: {cfg.branch}")
     print(f"  Force run: {cfg.force_run}")
     if cfg.extra_args:
         print(f"  Extra args: {' '.join(cfg.extra_args)}")
@@ -239,7 +241,7 @@ def watch_and_run(cfg: WatchConfig, env: TPUEnvConfig) -> None:
             # Add set -x to echo commands in the training pipeline and preserve stderr/stdout
             train_cmd = (
                 f"source ~/.zshrc && cd {env.gh_repo_name} && "
-                "git pull origin main && "
+                f"git fetch origin && git checkout {cfg.branch} && git pull origin {cfg.branch} && "
                 "XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 "
                 f"uv run --group tpu scripts/train.py {extra}"
             )
@@ -271,7 +273,12 @@ def main(argv: list[str] | None = None) -> int:
     # Normalize extras: drop a leading '--' sentinel if present
     if extra and extra[0] == "--":
         extra = extra[1:]
-    cfg = WatchConfig(version=ns.version, force_run=ns.force, tpu_num=ns.tpu_num, extra_args=extra)
+    # Extract branch name if present (first non-flag argument in extra)
+    branch = "main"
+    if extra and not extra[0].startswith("-"):
+        branch = extra[0]
+        extra = extra[1:]
+    cfg = WatchConfig(version=ns.version, force_run=ns.force, tpu_num=ns.tpu_num, branch=branch, extra_args=extra)
     env = TPUEnvConfig.from_env()
     watch_and_run(cfg, env)
     return 0
