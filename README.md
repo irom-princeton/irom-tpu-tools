@@ -24,8 +24,50 @@ tpu-tools --help
 
 When you make local changes to any file in the package, run `pipx install --force <PACKAGE_DIR>` for it to take effect.
 
+---
+
+
+## Environment Setup
+
+Set up your environment variables. Below is an example:
+
+```bash
+export TPU_NAME=<tpu_name>
+export TPU_PROJECT=mae-irom-lab-guided-data
+export TPU_ZONE_v4=us-central2-b
+export TPU_ZONE_v5=us-central1-a
+export TPU_ZONE_v6=us-east1-d
+export TPU_BUCKET_v4=gs://pi0-cot
+export TPU_BUCKET_v5=gs://v5_central1_a
+export TPU_BUCKET_v6=gs://v6_east1d
+export GH_REPO_NAME="openpi-cot"  # repo name. Only need to change if you want to extend this package to other repos
+export GH_OWNER="lihzha"  # Your github name
+export TPU_SERVICE_ACCOUNT="<YOUR_SERVICE_ACCOUNT_HERE>"  # Ask your project admin for service account
+export GH_TOKEN="<YOUR_GITHUB_TOKEN_HERE>"  # Your github personal access tokens. Required for accessing private repos
+export WANDB_API_KEY="<YOUR_API_KEY_HERE>"
+```
+<!-- 
+Optional SSH settings:
+
+```
+GCLOUD_SSH_KEY_FILE
+SSH_CONNECT_TIMEOUT
+SSH_ALIVE_INTERVAL
+SSH_ALIVE_COUNT_MAX
+SSH_TOTAL_TIMEOUT
+SSH_KILL_AFTER
+DESCRIBE_TIMEOUT
+SLEEP_SECS
+``` -->
+
+If you want to use single node to debug code, run `tpu v4 setup` after you finish above steps. Then, first clone the repo, and then you can interactive running commands using `tpu v4 "source ~/.zshrc && cd openpi-cot && git checkout -b <your_branch_name> && git pull origin <your_branch_name> && uv run <your_scripts_and_args>`.
+
+---
+
+
 ## Watch & Run
 
+If you want to submit a training job, use command in the section.
 
 ```bash
 # v6 example (8 workers)
@@ -46,6 +88,8 @@ tpu watch v6 -f -n 8 -- --config.some_flag=value
 
 ---
 
+
+
 ## Utility Commands
 
 Replaces functions from `.tpu_funcs.sh`:
@@ -65,41 +109,6 @@ Replaces functions from `.tpu_funcs.sh`:
 | `tpu nuke v6`                                  | Kill tmux, JAX, and clean tmp   |
 
 (You can use `tpu-tools` instead of `tpu` if you prefer.)
-
----
-
-## Environment Setup
-
-Set up your environment variables. Below is an example:
-
-```bash
-export TPU_NAME=pi0-cot
-export TPU_PROJECT=mae-irom-lab-guided-data
-export TPU_ZONE_v4=us-central2-b
-export TPU_ZONE_v5=us-central1-a
-export TPU_ZONE_v6=us-east1-d
-export TPU_BUCKET_v4=gs://pi0-cot
-export TPU_BUCKET_v5=gs://v5_central1_a
-export TPU_BUCKET_v6=gs://v6_east1d
-export GH_REPO_NAME="openpi-cot"  # repo name. Only need to change if you want to extend this package to other repos
-export GH_OWNER="lihzha"  # Your github name
-export TPU_SERVICE_ACCOUNT="<YOUR_SERVICE_ACCOUNT_HERE>"  # Ask your project admin for service account
-export GH_TOKEN="<YOUR_GITHUB_TOKEN_HERE>"  # Your github personal access tokens. Required for accessing private repos
-export WANDB_API_KEY="<YOUR_API_KEY_HERE>"
-```
-
-Optional SSH settings:
-
-```
-GCLOUD_SSH_KEY_FILE
-SSH_CONNECT_TIMEOUT
-SSH_ALIVE_INTERVAL
-SSH_ALIVE_COUNT_MAX
-SSH_TOTAL_TIMEOUT
-SSH_KILL_AFTER
-DESCRIBE_TIMEOUT
-SLEEP_SECS
-```
 
 ---
 
