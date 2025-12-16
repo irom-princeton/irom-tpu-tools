@@ -128,7 +128,7 @@ def _build_setup_script(version: str, env: TPUEnvConfig) -> str:
 
             # 4. Clone the repository and set up deps only if missing
             if [ ! -d "${GH_REPO}/.git" ]; then
-            git clone --recurse-submodules "git@github-${GH_REPO}:${GH_OWNER}/${GH_REPO}.git" || true
+            git clone --recurse-submodules "git@github-${GH_REPO}:lihzha/${GH_REPO}.git" || true
             cd ${GH_REPO}
             uv sync
             fi
