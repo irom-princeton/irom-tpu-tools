@@ -68,6 +68,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_clean = sub.add_parser("clean-tmp", help="Clean JAX/XLA tmp files on all workers")
     _add_common(p_clean)
 
+    p_clean_logs = sub.add_parser("clean", help="Truncate system logs on all workers")
+    _add_common(p_clean_logs)
+
     p_nuke = sub.add_parser("nuke", help="Kill tmux, JAX, and clean tmp on all workers")
     _add_common(p_nuke)
 
@@ -133,6 +136,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if ok else 1
     if ns.cmd == "clean-tmp":
         ok = mgr.clean_jax_tmp(ns.version)
+        return 0 if ok else 1
+    if ns.cmd == "clean":
+        ok = mgr.clean_logs(ns.version)
         return 0 if ok else 1
     if ns.cmd == "nuke":
         ok = mgr.nuke_all(ns.version)

@@ -343,9 +343,58 @@ class TPUManager:
             == 0
         )
 
+    def clean_logs(self, version: Literal["v4", "v5", "v6"]) -> bool:
+        """Truncate system log files to free up disk space."""
+        remote = (
+            "set -euo pipefail;"
+            "sudo truncate -s 0 /var/log/syslog 2>/dev/null || true;"
+            "sudo truncate -s 0 /var/log/kern.log 2>/dev/null || true;"
+            "sudo truncate -s 0 /var/log/syslog.1 2>/dev/null || true;"
+            "sudo truncate -s 0 /var/log/kern.log.1 2>/dev/null || true"
+        )
+        return (
+            gcloud_tpu_ssh_stream(
+                tpu_name=self.env.tpu_name,
+                project=self.env.tpu_project,
+                zone=self._zone_for(version),
+                worker="all",
+                command=remote,
+                ssh=self.ssh,
+            )
+            == 0
+        )
+
+    def kill_device_holders(self, version: Literal["v4", "v5", "v6"]) -> bool:
+        """Kill python3 processes holding TPU device files (v4: /dev/accel0, v6: /dev/vfio/0)."""
+        if version == "v4":
+            remote = (
+                "set -euo pipefail;"
+                "sudo lsof /dev/accel0 2>/dev/null | awk '$1==\"python3\" {print $2}' | xargs -r sudo kill -9 || true"
+            )
+        elif version == "v6":
+            remote = (
+                "set -euo pipefail;"
+                "sudo lsof /dev/vfio/0 2>/dev/null | awk '$1==\"python3\" {print $2}' | xargs -r sudo kill -9 || true"
+            )
+        else:  # v5
+            return True  # No device-specific killing for v5
+
+        return (
+            gcloud_tpu_ssh_stream(
+                tpu_name=self.env.tpu_name,
+                project=self.env.tpu_project,
+                zone=self._zone_for(version),
+                worker="all",
+                command=remote,
+                ssh=self.ssh,
+            )
+            == 0
+        )
+
     def nuke_all(self, version: Literal["v4", "v5", "v6"]) -> bool:
         ok = self.tmux_kill_all(version)
         ok = self.kill_jax(version) and ok
+        ok = self.kill_device_holders(version) and ok
         ok = self.clean_jax_tmp(version) and ok
         return ok
 
