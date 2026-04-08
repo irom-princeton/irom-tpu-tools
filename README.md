@@ -5,7 +5,7 @@ Unified TPU utilities and watcher for any repo across **v4 / v5 / v6**.
 ## Installation
 
 ```bash
-git clone https://github.com/lihzha/irom-tpu-tools.git
+git clone https://github.com/irom-princeton/irom-tpu-tools.git
 pipx install ./irom-tpu-tools
 
 # Ensure ~/.local/bin is on PATH
