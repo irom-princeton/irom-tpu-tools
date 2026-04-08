@@ -21,11 +21,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_watch.add_argument("--force", "-f", action="store_true", help="Force setup and training even if READY")
     p_watch.add_argument("--tpu-num", "-n", type=int, default=8, help="TPU chips")
 
-    p_watch_vis = sub.add_parser("watch_vis", help="Watch TPU state and (re)create + run visualization")
-    p_watch_vis.add_argument("version", choices=["v4", "v5", "v6"], help="TPU version to target")
-    p_watch_vis.add_argument("--force", "-f", action="store_true", help="Force setup and visualization even if READY")
-    p_watch_vis.add_argument("--tpu-num", "-n", type=int, default=8, help="TPU chips")
-
     p_list = sub.add_parser("list", help="List TPUs in zone")
     _add_common(p_list)
 
@@ -96,10 +91,6 @@ def main(argv: list[str] | None = None) -> int:
         from .watch import main as _watch_main
 
         return _watch_main([ns.version, *((ns.force and ["--force"]) or []), "-n", str(ns.tpu_num), *unknown])
-    if ns.cmd == "watch_vis":
-        from .watch_vis import main as _watch_vis_main
-
-        return _watch_vis_main([ns.version, *((ns.force and ["--force"]) or []), "-n", str(ns.tpu_num), *unknown])
 
     env = TPUEnvConfig.from_env()
     mgr = TPUManager(env)

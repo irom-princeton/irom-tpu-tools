@@ -18,4 +18,4 @@ __all__ = [
     "TPUManager",
 ]
 
-PROJECT_NAME = "openpi-cot"
+PROJECT_NAME = "irom-tpu-tools"

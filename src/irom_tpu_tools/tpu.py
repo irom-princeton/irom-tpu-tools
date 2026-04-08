@@ -169,7 +169,7 @@ class TPUManager:
                 raise ValueError("topology is required for v4")
             args = [*common, "--type", "v4", "--topology", topology, "--version", "tpu-ubuntu2204-base"]
         elif version == "v5":
-            accel = {16: "v5litepod-16", 32: "v5litepod-32", 64: "v5litepod-64"}.get(tpu_num)
+            accel = {8: "v5litepod-8", 16: "v5litepod-16", 32: "v5litepod-32", 64: "v5litepod-64"}.get(tpu_num)
             if not accel:
                 raise ValueError("Unsupported TPU_NUM for v5: expected 16/32/64")
             args = [*common, "--accelerator-type", accel, "--version", "v2-alpha-tpuv5-lite"]
@@ -371,7 +371,7 @@ class TPUManager:
                 "set -euo pipefail;"
                 "sudo lsof /dev/accel0 2>/dev/null | awk '$1==\"python3\" {print $2}' | xargs -r sudo kill -9 || true"
             )
-        elif version == "v6":
+        elif version in {"v5", "v6"}:
             remote = (
                 "set -euo pipefail;"
                 "sudo lsof /dev/vfio/0 2>/dev/null | awk '$1==\"python3\" {print $2}' | xargs -r sudo kill -9 || true"

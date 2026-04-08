@@ -1,164 +1,140 @@
-# openpi-tpu-tools
+# irom-tpu-tools
 
-Unified TPU utilities and watcher for OpenPI-CoT across **v4 / v5 / v6**.
+Unified TPU utilities and watcher for any repo across **v4 / v5 / v6**.
 
 ## Installation
 
 ```bash
+git clone https://github.com/lihzha/irom-tpu-tools.git
+pipx install ./irom-tpu-tools
 
-# Install from GitHub
-pipx install git+https://github.com/lihzha/openpi-tpu-tools.git
-
-# or install from local path after cloning
-git clone https://github.com/lihzha/openpi-tpu-tools.git
-pipx install ./openpi-tpu-tools
-
-# Ensure ~/.local/bin is on PATH (for --user installs)
+# Ensure ~/.local/bin is on PATH
 export PATH="$HOME/.local/bin:$PATH"
 
-# Verify (both names work)
+# Verify
 tpu --help
-# or
-tpu-tools --help
 ```
 
-When you make local changes to any file in the package, run `pipx install --force <PACKAGE_DIR>` for it to take effect.
+When you make local changes to any file in the package, run `pipx install --force ./irom-tpu-tools` for it to take effect.
 
 ---
-
 
 ## Environment Setup
 
-Set up your environment variables. Below is an example:
+Export the following variables (e.g. in your `~/.bashrc` or `~/.zshrc`):
 
 ```bash
 export TPU_NAME=<tpu_name>
-export TPU_PROJECT=mae-irom-lab-guided-data
+export TPU_PROJECT=<gcp_project_id>
 export TPU_ZONE_v4=us-central2-b
 export TPU_ZONE_v5=us-central1-a
 export TPU_ZONE_v6=us-east1-d
-export TPU_BUCKET_v4=gs://pi0-cot
-export TPU_BUCKET_v5=gs://v5_central1_a
-export TPU_BUCKET_v6=gs://v6_east1d
-export GH_REPO_NAME="openpi-cot"  # repo name. Only need to change if you want to extend this package to other repos
-export GH_OWNER="lihzha"  # Your github name
-export TPU_SERVICE_ACCOUNT="<YOUR_SERVICE_ACCOUNT_HERE>"  # Ask your project admin for service account
-export GH_TOKEN="<YOUR_GITHUB_TOKEN_HERE>"  # Your github personal access tokens. Required for accessing private repos
-export WANDB_API_KEY="<YOUR_API_KEY_HERE>"
+export TPU_BUCKET_v4=gs://my-bucket-v4
+export TPU_BUCKET_v5=gs://my-bucket-v5
+export TPU_BUCKET_v6=gs://my-bucket-v6
+export TPU_SERVICE_ACCOUNT=<service_account_email>   # ask your project admin
+export GH_REPO_NAME=<github_repo_name>               # repo to clone on the TPU
+export GH_OWNER=<your_github_username>               # owner of the repo/fork
+export GH_TOKEN=<your_github_personal_access_token>  # needs repo read access
+export WANDB_API_KEY=<your_wandb_api_key>
 ```
-<!-- 
-Optional SSH settings:
 
-```
-GCLOUD_SSH_KEY_FILE
-SSH_CONNECT_TIMEOUT
-SSH_ALIVE_INTERVAL
-SSH_ALIVE_COUNT_MAX
-SSH_TOTAL_TIMEOUT
-SSH_KILL_AFTER
-DESCRIBE_TIMEOUT
-SLEEP_SECS
-``` -->
-
-If you want to use single node to debug code, run `tpu v4 setup` after you finish above steps. Then, first clone the repo, and then you can interactive running commands using `tpu v4 "source ~/.zshrc && cd openpi-cot && git checkout -b <your_branch_name> && git pull origin <your_branch_name> && uv run <your_scripts_and_args>`.
+`GH_OWNER` / `GH_TOKEN` are used to clone via HTTPS (`https://<token>@github.com/<owner>/<repo>`), so this works with your own fork — you do **not** need to be the upstream repo owner.
 
 ---
-
 
 ## Watch & Run
 
-If you want to submit a training job, use command in the section.
+`tpu watch` is the main command for submitting and monitoring training jobs. It:
 
-```bash
-# v6 example (8 workers)
-tpu watch v6 -f -n 8 -- <extra args>
+1. Checks TPU state in a loop.
+2. Creates the TPU if it doesn't exist (or was preempted/stopped).
+3. SSHes into all workers, clones your repo (if not already present), and runs the setup command.
+4. Launches your training command inside a `tmux` session.
+5. Keeps watching and re-launches automatically if the TPU is preempted.
 
-# v5 example (16 workers)
-tpu watch v5 -f -n 16 -- <extra args>
+### Command structure
 
-# v4 example (8 workers, maps 8→2x2x2 topology)
-tpu watch v4 -f -n 8 -- <extra args>
+```
+tpu watch <version> [flags] <branch> <run_command...>
 ```
 
-Use `--` to separate TPU arguments from training script arguments:
+| Argument / Flag | Description |
+|---|---|
+| `version` | TPU version: `v4`, `v5`, or `v6` |
+| `-n / --tpu-num` | Number of chips (v4: 4/8/16/32 · v5: 16/32/64 · v6: 8/16/32/64/128) |
+| `-f / --force` | Force re-setup and re-launch even if the TPU is already READY |
+| `-s / --setup-cmd` | Shell command(s) to run after cloning the repo (default: `uv sync`) |
+| `branch` | Git branch to check out before running (first positional arg after flags) |
+| `run_command...` | The full command to execute on the TPU (everything after the branch) |
 
+### Examples
+
+**Basic training job on 8 v6 chips:**
 ```bash
-tpu watch v6 -f -n 8 -- --config.some_flag=value
+tpu watch v6 -n 8 main \
+  XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 uv run --group tpu scripts/train.py --config my_config
 ```
+
+**Custom dependency setup (e.g. editable install on top of uv sync):**
+```bash
+tpu watch v6 -n 8 --setup-cmd "uv sync && uv pip install -e ." main \
+  XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 uv run --group tpu scripts/train.py --config my_config
+```
+
+**Force re-run on an already-running TPU (e.g. after a failed job):**
+```bash
+tpu nuke v6                      # kill existing processes first
+tpu watch v6 -f -n 8 my-branch \
+  XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 uv run --group tpu scripts/train.py --config my_config
+```
+
+> **Note:** `-f` launches the job once and exits. To resume continuous watching (auto-relaunch on preemption), re-run the same command **without** `-f`.
+
+### How setup works
+
+On first launch (or after a preemption), the tool SSHes into all TPU workers and:
+1. Writes environment variables to `~/.zshrc`.
+2. Installs `uv`.
+3. Clones your repo via HTTPS using `GH_TOKEN` (skipped if already cloned).
+4. Runs `--setup-cmd` inside the repo directory (default: `uv sync`).
+
+Setup is **idempotent** — re-running on an already-set-up worker is safe.
 
 ---
-
-
 
 ## Utility Commands
 
-Replaces functions from `.tpu_funcs.sh`:
+Replace `v6` with `v4` or `v5` as needed.
 
-| Command                                        | Description                     |
-| ---------------------------------------------- | ------------------------------- |
-| `tpu list v6`                                  | List TPUs in v6                 |
-| `tpu delete v6`                                | Delete current TPU              |
-| `tpu delete-name v6 NAME`                      | Delete TPU by name              |
-| `tpu tmux v6 --session s <cmd>`                | Run command in tmux on TPU      |
-| `tpu attach v6 --session s --worker 0`         | Attach to tmux session worker 0 |
-| `tpu tmux-ls v6`                               | List tmux sessions              |
-| `tpu tail v6 --worker 0`                       | Tail last log for worker 0      |
-| `tpu tmux-kill-all v6`                         | Kill all tmux sessions          |
-| `tpu kill-jax v6`                              | Kill all JAX processes          |
-| `tpu clean-tmp v6`                             | Clean `/tmp` on TPU             |
-| `tpu nuke v6`                                  | Kill tmux, JAX, and clean tmp   |
+| Command | Description |
+|---|---|
+| `tpu nuke v6` | Kill all running processes on the TPU |
+| `tpu list v6` | List TPUs in the v6 zone |
+| `tpu delete v6` | Delete the current TPU |
+| `tpu delete-name v6 NAME` | Delete a TPU by name |
+| `tpu v6 setup` | Run the setup step manually (clone + install) |
+| `tpu tmux v6 --session s <cmd>` | Run a command in a tmux session on the TPU |
+| `tpu attach v6 --session s --worker 0` | Attach to a tmux session on worker 0 |
+| `tpu tmux-ls v6` | List tmux sessions |
+| `tpu tail v6 --worker 0` | Tail the most recent log for worker 0 |
+| `tpu tmux-kill-all v6` | Kill all tmux sessions |
+| `tpu kill-jax v6` | Kill all JAX processes |
+| `tpu clean-tmp v6` | Clean `/tmp` on all workers |
 
-(You can use `tpu-tools` instead of `tpu` if you prefer.)
-
----
-
-## Development
-
-### Extending for Different Training Frameworks
-
-This tool is currently configured for OpenPI/OpenPI-CoT training, but can be easily adapted for other frameworks. **The only file you need to modify is `watch.py`** - it contains all the training-specific logic.
-
-#### Key areas to customize in `watch.py`:
-
-1. **Environment setup template** (lines ~120-182):
-   - Modify environment variables (WANDB_API_KEY, data paths, etc.)
-   - Change repository URL and clone commands
-   - Update dependency installation (uv/conda/pip)
-
-2. **Training command** (lines ~199-207):
-   - Replace the `uv run scripts/train.py` command
-   - Update target names (currently `pi_droid_cot_v4/v5/v6`)
-   - Modify environment variables like `XLA_PYTHON_CLIENT_MEM_FRACTION`
-
-3. **Configuration variables**:
-   - Repository name, owner, and structure
-   - Training script paths and arguments
-   - Data storage locations
-
-#### Example customization for a different framework:
-
-```python
-# In watch.py, replace the training command section:
-train_cmd = (
-    "source ~/.zshrc && cd my-training-repo && "
-    "git pull origin main && "
-    "python train.py --config my_config.yaml " + extra
-)
-```
-
-All other components (TPU management, SSH handling, tmux operations) work generically across frameworks.
+You can use `tpu-tools` instead of `tpu` for any command.
 
 ---
 
 ## Package Structure
 
 ```
-openpi-tpu-tools/
+irom-tpu-tools/
   pyproject.toml      # Console scripts: tpu, tpu-tools
-  src/openpi_tpu_tools/
-    config.py         # Env loader for v4/v5/v6
-    ssh.py            # gcloud SSH wrapper w/ timeouts
-    tpu.py            # List/delete/tmux/kill/nuke helpers
+  src/irom_tpu_tools/
+    config.py         # Env var loader
+    ssh.py            # gcloud SSH wrapper with timeouts
+    tpu.py            # TPU lifecycle helpers (list/delete/tmux/kill/nuke)
     watch.py          # Watch-and-run logic
     cli.py            # CLI dispatcher
     __init__.py
@@ -172,6 +148,5 @@ openpi-tpu-tools/
 
 ```bash
 tpu --help
-# or
-tpu-tools --help
+tpu watch --help
 ```
