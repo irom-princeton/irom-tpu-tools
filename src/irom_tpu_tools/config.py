@@ -22,16 +22,27 @@ class TPUEnvConfig:
     gh_token: str
     gh_owner: str
 
+    @property
+    def zones(self) -> dict[str, str]:
+        """Return {version: zone} mapping for all configured TPU versions."""
+        return {
+            "v4": self.tpu_zone_v4,
+            "v5": self.tpu_zone_v5,
+            "v6": self.tpu_zone_v6,
+        }
+
     @staticmethod
-    def from_env() -> TPUEnvConfig:
+    def from_env(require_tpu_name: bool = True) -> TPUEnvConfig:
         def must_get(name: str) -> str:
             val = os.environ.get(name, "").strip()
             if not val:
                 raise RuntimeError(f"Missing required environment variable: {name}")
             return val
 
+        tpu_name = must_get("TPU_NAME") if require_tpu_name else os.environ.get("TPU_NAME", "").strip()
+
         return TPUEnvConfig(
-            tpu_name=must_get("TPU_NAME"),
+            tpu_name=tpu_name,
             tpu_project=must_get("TPU_PROJECT"),
             tpu_zone_v4=must_get("TPU_ZONE_v4"),
             tpu_zone_v5=must_get("TPU_ZONE_v5"),

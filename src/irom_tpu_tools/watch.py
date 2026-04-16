@@ -4,12 +4,14 @@ import argparse
 import base64
 from dataclasses import dataclass
 from datetime import datetime
+import os
 import signal
 from string import Template
 import sys
 from time import sleep
 
 from .config import TPUEnvConfig
+from .jobs import JobConfig
 from .tpu import TPUManager
 
 
@@ -90,6 +92,187 @@ def run_setup(version: str, env: TPUEnvConfig, *, worker: str | None = "all", se
     return mgr.raw(version, cmd=remote_cmd, worker=worker)
 
 
+def _do_setup_and_training(
+    mgr: TPUManager,
+    version: str,
+    env: TPUEnvConfig,
+    *,
+    command: str,
+    branch: str,
+    setup_cmd: str,
+) -> bool:
+    """Run setup + optionally launch training. Returns True on success."""
+    print(f"{_ts()} - Setting up environment and repository...")
+    remote_cmd = build_setup_cmd(version, env, setup_cmd)
+    rc = mgr.raw(version, cmd=remote_cmd, worker="all")
+    if rc != 0:
+        print(f"{_ts()} - Setup failed (rc={rc}).")
+        return False
+
+    if not command:
+        print(f"{_ts()} - Setup complete (no training command specified).")
+        return True
+
+    print(f"{_ts()} - Starting training...")
+    train_cmd = (
+        f"source ~/.zshrc && cd {env.gh_repo_name} && "
+        f"git fetch origin && git checkout {branch} && git pull origin {branch} && "
+        f"{command}"
+    )
+    if not mgr.tmux(version, cmd=train_cmd, session="tpu"):
+        print(f"{_ts()} - Launch failed/SSH timed out.")
+        return False
+
+    print(f"{_ts()} - Training started successfully!")
+    return True
+
+
+def create_and_launch(job: JobConfig, env: TPUEnvConfig) -> bool:
+    """Create a TPU, run setup, and launch training. Returns True on success.
+
+    Used by `tpu create` for the initial provisioning.
+    """
+    mgr = TPUManager(env).for_tpu(job.name, job.version, env.zones[job.version])
+
+    print(f"{_ts()} - Creating TPU '{job.name}'...")
+    topo = job.topology or (_map_v4_topology(job.tpu_num) if job.version == "v4" else None)
+    if not mgr.create(job.version, tpu_num=job.tpu_num, topology=topo):
+        print(f"{_ts()} - Create failed/timed out.")
+        return False
+
+    print(f"{_ts()} - Waiting for TPU to be READY...")
+    sleep(10)
+
+    return _do_setup_and_training(
+        mgr, job.version, env,
+        command=job.command, branch=job.branch, setup_cmd=job.setup_cmd,
+    )
+
+
+def watch_loop(job: JobConfig, env: TPUEnvConfig) -> None:
+    """Background watcher loop: monitor TPU state and recover from preemptions.
+
+    This runs as a daemon — it never returns unless signaled.
+    """
+    mgr = TPUManager(env).for_tpu(job.name, job.version, env.zones[job.version])
+
+    print(f"{_ts()} - Watcher started for TPU '{job.name}' ({job.version})")
+    print(f"{_ts()} - Command: {job.command}")
+    print(f"{_ts()} - Branch: {job.branch}")
+    sys.stdout.flush()
+
+    def handle_sig(signum, frame):
+        print(f"{_ts()} - Watcher caught signal {signum}, exiting.")
+        sys.stdout.flush()
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGINT, handle_sig)
+    signal.signal(signal.SIGTERM, handle_sig)
+
+    from .jobs import record_preemption, record_running
+
+    recorded_ready = False
+
+    while True:
+        try:
+            state = mgr.describe(job.version)
+        except Exception as exc:
+            print(f"{_ts()} - Describe error: {exc}")
+            sys.stdout.flush()
+            sleep(mgr.sleep_secs)
+            continue
+
+        print(f"{_ts()} - TPU '{job.name}' state: {state}")
+        sys.stdout.flush()
+
+        if state == "READY":
+            if not recorded_ready:
+                record_running(job.name)
+                recorded_ready = True
+            sleep(mgr.sleep_secs)
+            continue
+
+        if state in {"PREEMPTED", "STOPPED", "NOT_FOUND"}:
+            recorded_ready = False
+            if state == "PREEMPTED":
+                record_preemption(job.name)
+                print(f"{_ts()} - Preemption recorded.")
+            print(f"{_ts()} - Creating/recovering TPU...")
+            if state != "NOT_FOUND" and not mgr.delete(job.version):
+                print(f"{_ts()} - Delete failed/timed out.")
+                sys.stdout.flush()
+                sleep(mgr.sleep_secs)
+                continue
+
+            topo = job.topology or (_map_v4_topology(job.tpu_num) if job.version == "v4" else None)
+            print(f"{_ts()} - Creating TPU...")
+            if not mgr.create(job.version, tpu_num=job.tpu_num, topology=topo):
+                print(f"{_ts()} - Create failed/timed out, will retry.")
+                sys.stdout.flush()
+                sleep(mgr.sleep_secs)
+                continue
+
+            print(f"{_ts()} - Waiting for TPU to be READY...")
+            sleep(10)
+
+            ok = _do_setup_and_training(
+                mgr, job.version, env,
+                command=job.command, branch=job.branch, setup_cmd=job.setup_cmd,
+            )
+            if ok:
+                record_running(job.name)
+                recorded_ready = True
+                print(f"{_ts()} - TPU ready, training launched.")
+            else:
+                print(f"{_ts()} - Setup/launch failed, will retry next cycle.")
+            sys.stdout.flush()
+
+        elif state == "PERMISSION_DENIED":
+            print(f"{_ts()} - PERMISSION_DENIED. Check IAM/API enablement.")
+            sys.stdout.flush()
+
+        sleep(mgr.sleep_secs)
+
+
+def spawn_watcher(job: JobConfig, env: TPUEnvConfig) -> int:
+    """Fork a background watcher daemon. Returns the daemon PID."""
+    from .jobs import log_path, save_pid
+
+    log_file = log_path(job.name)
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+
+    pid = os.fork()
+    if pid > 0:
+        # Parent — record daemon PID and return
+        save_pid(job.name, pid)
+        return pid
+
+    # Child — become a daemon
+    os.setsid()
+
+    # Redirect stdout/stderr to log file
+    fd = os.open(str(log_file), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+    os.dup2(fd, 1)  # stdout
+    os.dup2(fd, 2)  # stderr
+    os.close(fd)
+    # Close stdin
+    devnull = os.open(os.devnull, os.O_RDONLY)
+    os.dup2(devnull, 0)
+    os.close(devnull)
+
+    try:
+        watch_loop(job, env)
+    except SystemExit:
+        pass
+    except Exception as exc:
+        print(f"{_ts()} - Watcher crashed: {exc}")
+    finally:
+        os._exit(0)
+
+
+# ---------- legacy watch (kept for `tpu watch` backwards compat) ----------
+
+
 def watch_and_run(cfg: WatchConfig, env: TPUEnvConfig) -> None:
     mgr = TPUManager(env)
 
@@ -158,30 +341,17 @@ def watch_and_run(cfg: WatchConfig, env: TPUEnvConfig) -> None:
             continue
 
         if run_setup_and_training:
-            print(f"{_ts()} - Setting up environment and repository...")
-            rc = run_setup(cfg.version, env, worker="all", setup_cmd=cfg.setup_cmd)
-            if rc != 0:
-                print(f"{_ts()} - Setup failed (rc={rc}). See above for remote logs. Back to state check.")
-                sleep(mgr.sleep_secs)
-                continue
-
-            print(f"{_ts()} - Starting training...")
             if not cfg.extra_args:
                 print(f"{_ts()} - No command provided. Pass the command to run after the branch name.")
                 sleep(mgr.sleep_secs)
                 continue
-            run_cmd = " ".join(cfg.extra_args)
-            train_cmd = (
-                f"source ~/.zshrc && cd {env.gh_repo_name} && "
-                f"git fetch origin && git checkout {cfg.branch} && git pull origin {cfg.branch} && "
-                f"{run_cmd}"
+            ok = _do_setup_and_training(
+                mgr, cfg.version, env,
+                command=" ".join(cfg.extra_args), branch=cfg.branch, setup_cmd=cfg.setup_cmd,
             )
-            if not mgr.tmux(cfg.version, cmd=train_cmd, session="tpu"):
-                print(f"{_ts()} - Launch failed/SSH timed out. Back to state check.")
+            if not ok:
                 sleep(mgr.sleep_secs)
                 continue
-
-            print(f"{_ts()} - Training started successfully!")
             if cfg.force_run:
                 print(f"{_ts()} - Force run requested; exiting.")
                 return

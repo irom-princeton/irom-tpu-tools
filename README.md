@@ -1,6 +1,6 @@
 # irom-tpu-tools
 
-Unified TPU utilities and watcher for any repo across **v4 / v5 / v6**.
+Unified TPU utilities and background watcher for any repo across **v4 / v5 / v6**.
 
 ## Installation
 
@@ -12,7 +12,8 @@ pipx install ./irom-tpu-tools
 export PATH="$HOME/.local/bin:$PATH"
 
 # Verify
-tpu --help
+tpu --help       # 
+tpu --commands   # command cheat sheet
 ```
 
 When you make local changes to any file in the package, run `pipx install --force ./irom-tpu-tools` for it to take effect.
@@ -24,7 +25,7 @@ When you make local changes to any file in the package, run `pipx install --forc
 Export the following variables (e.g. in your `~/.bashrc` or `~/.zshrc`):
 
 ```bash
-export TPU_NAME=<tpu_name>
+export TPU_NAME=<default_tpu_name>                   # optional; used when --name is omitted
 export TPU_PROJECT=<gcp_project_id>
 export TPU_ZONE_v4=us-central2-b
 export TPU_ZONE_v5=us-central1-a
@@ -43,84 +44,104 @@ export WANDB_API_KEY=<your_wandb_api_key>
 
 ---
 
-## Watch & Run
+## Quickstart
 
-`tpu watch` is the main command for submitting and monitoring training jobs. It:
+`tpu create` is the main entrypoint. It provisions the TPU, runs setup, launches training in a tmux session, and **spawns a background daemon** that monitors the TPU and automatically recreates it + relaunches training on preemption.
 
-1. Checks TPU state in a loop.
-2. Creates the TPU if it doesn't exist (or was preempted/stopped).
-3. SSHes into all workers, clones your repo (if not already present), and runs the setup command.
-4. Launches your training command inside a `tmux` session.
-5. Keeps watching and re-launches automatically if the TPU is preempted.
-
-### Command structure
-
-```
-tpu watch <version> [flags] <branch> <run_command...>
-```
-
-| Argument / Flag | Description |
-|---|---|
-| `version` | TPU version: `v4`, `v5`, or `v6` |
-| `-n / --tpu-num` | Number of chips (v4: 4/8/16/32 · v5: 16/32/64 · v6: 8/16/32/64/128) |
-| `-f / --force` | Force re-setup and re-launch even if the TPU is already READY |
-| `-s / --setup-cmd` | Shell command(s) to run after cloning the repo (default: `uv sync`) |
-| `branch` | Git branch to check out before running (first positional arg after flags) |
-| `run_command...` | The full command to execute on the TPU (everything after the branch) |
-
-### Examples
-
-**Basic training job on 8 v6 chips:**
 ```bash
-tpu watch v6 -n 8 main \
-  XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 uv run --group tpu scripts/train.py --config my_config
+# Submit a job — returns immediately; watcher runs in the background.
+tpu create v6 --name my-tpu -n 8 \
+  -- XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 uv run --group tpu scripts/train.py --config my_config
+
+# Check what's going on.
+tpu status                    # all managed jobs
+tpu logs tpu-name -f            # follow the watcher log
+
+# Attach to the training tmux session on worker 0.
+tpu attach tpu-name
+
+# When you're done.
+tpu delete tpu-name             # stops watcher + deletes TPU
 ```
 
-**Custom dependency setup (e.g. editable install on top of uv sync):**
-```bash
-tpu watch v6 -n 8 --setup-cmd "uv sync && uv pip install -e ." main \
-  XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 uv run --group tpu scripts/train.py --config my_config
-```
-
-**Force re-run on an already-running TPU (e.g. after a failed job):**
-```bash
-tpu nuke v6                      # kill existing processes first
-tpu watch v6 -f -n 8 my-branch \
-  XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 uv run --group tpu scripts/train.py --config my_config
-```
-
-> **Note:** `-f` launches the job once and exits. To resume continuous watching (auto-relaunch on preemption), re-run the same command **without** `-f`.
-
-### How setup works
-
-On first launch (or after a preemption), the tool SSHes into all TPU workers and:
-1. Writes environment variables to `~/.zshrc`.
-2. Installs `uv`.
-3. Clones your repo via HTTPS using `GH_TOKEN` (skipped if already cloned).
-4. Runs `--setup-cmd` inside the repo directory (default: `uv sync`).
-
-Setup is **idempotent** — re-running on an already-set-up worker is safe.
+Everything after `--` is the training command. It will be run from inside the cloned repo, after `git fetch && git checkout <branch> && git pull`.
 
 ---
 
-## Utility Commands
+## Commands
 
-Replace `v6` with `v4` or `v5` as needed.
+Most per-TPU commands take a TPU **name** and auto-detect the version/zone by querying gcloud. If the name is omitted, `$TPU_NAME` is used.
+
+### 🚀 Lifecycle
 
 | Command | Description |
 |---|---|
-| `tpu nuke v6` | Kill all running processes on the TPU |
-| `tpu list v6` | List TPUs in the v6 zone |
-| `tpu delete v6` | Delete the current TPU |
-| `tpu delete-name v6 NAME` | Delete a TPU by name |
-| `tpu v6 setup` | Run the setup step manually (clone + install) |
-| `tpu tmux v6 --session s <cmd>` | Run a command in a tmux session on the TPU |
-| `tpu attach v6 --session s --worker 0` | Attach to a tmux session on worker 0 |
-| `tpu tmux-ls v6` | List tmux sessions |
-| `tpu tail v6 --worker 0` | Tail the most recent log for worker 0 |
-| `tpu tmux-kill-all v6` | Kill all tmux sessions |
-| `tpu kill-jax v6` | Kill all JAX processes |
-| `tpu clean-tmp v6` | Clean `/tmp` on all workers |
+| `tpu create <version> --name NAME -n N [-b BRANCH] [-s SETUP] -- <cmd...>` | Create TPU, setup, launch training, start background watcher |
+| `tpu delete [NAME]` | Delete the TPU and stop its background watcher |
+| `tpu stop [NAME]` | Stop the TPU (preserve allocation; can restart later) |
+| `tpu start [NAME]` | Restart a stopped TPU |
+
+`create` flags:
+
+| Flag | Description |
+|---|---|
+| `version` | `v4`, `v5`, or `v6` (positional, required) |
+| `--name` | TPU name (default: `$TPU_NAME`) |
+| `-n / --tpu-num` | Number of chips (v4: 4/8/16/32 · v5: 16/32/64 · v6: 8/16/32/64/128) |
+| `-b / --branch` | Git branch to check out (default: `main`) |
+| `-s / --setup-cmd` | Shell command(s) to run after cloning the repo (default: `uv sync`) |
+| `-- <cmd...>` | Training command — everything after `--` |
+
+### 📋 Monitoring
+
+| Command | Description |
+|---|---|
+| `tpu list` | List all TPUs across all zones (includes watcher status) |
+| `tpu list v6` | List TPUs in a specific zone |
+| `tpu status` | Show status of all managed jobs (watcher, preemptions, running since) |
+| `tpu status NAME` | Show status of a single job |
+| `tpu logs NAME` | Show last 50 lines of the watcher log |
+| `tpu logs NAME -f` | Follow the watcher log in real time |
+| `tpu logs NAME -n 500` | Show last N lines |
+
+The status/list tables include:
+- `STATE` — current TPU state (READY / PREEMPTED / STOPPED / ...)
+- `WATCHER` — whether the background daemon is alive
+- `RUNNING SINCE` — when the TPU most recently became READY
+- `#PREEMPTIONS` — total preemptions observed by the watcher
+- `LAST PREEMPTED` — timestamp of the most recent preemption
+
+### 🔗 Connect
+
+| Command | Description |
+|---|---|
+| `tpu attach NAME` | Attach to tmux session on worker 0 |
+| `tpu attach NAME --worker 1` | Attach on a specific worker |
+| `tpu tail NAME` | Tail last 50 lines of the latest tmux log on worker 0 |
+| `tpu tail NAME --worker 1` | Tail on a specific worker |
+| `tpu tmux-ls NAME` | List tmux sessions on all workers |
+| `tpu tmux NAME --session s -- <cmd>` | Run a command in a new/named tmux session on all workers |
+
+### 🧹 Cleanup
+
+| Command | Description |
+|---|---|
+| `tpu nuke NAME` | Kill tmux + JAX processes + clean tmp (full reset) |
+| `tpu kill-jax NAME` | Kill only JAX/XLA processes |
+| `tpu tmux-kill-all NAME` | Kill tmux server on all workers |
+| `tpu clean-tmp NAME` | Clean JAX/XLA temp files |
+| `tpu clean NAME` | Truncate system logs to free disk |
+
+### 🔧 Advanced
+
+| Command | Description |
+|---|---|
+| `tpu v4 -- <cmd>` | Run a raw SSH command on all v4 workers (no tmux) |
+| `tpu v4 --worker 0 -- <cmd>` | Run a raw command on a specific worker |
+| `tpu v4 setup` | Re-run the setup step (clone + install) on v4 workers |
+| `tpu watch v4 -n 8 -f main -- <cmd>` | **[Legacy]** Foreground watch loop (no daemon) |
+
+Replace `v4` with `v5` or `v6` as needed.
 
 You can use `tpu-tools` instead of `tpu` for any command.
 
@@ -132,11 +153,11 @@ You can use `tpu-tools` instead of `tpu` for any command.
 irom-tpu-tools/
   pyproject.toml      # Console scripts: tpu, tpu-tools
   src/irom_tpu_tools/
-    config.py         # Env var loader
-    ssh.py            # gcloud SSH wrapper with timeouts
-    tpu.py            # TPU lifecycle helpers (list/delete/tmux/kill/nuke)
-    watch.py          # Watch-and-run logic
     cli.py            # CLI dispatcher
+    config.py         # Env var loader
+    jobs.py           # Persistent job state in ~/.tpu-jobs/
+    tpu.py            # TPU lifecycle helpers (create/list/delete/tmux/kill/nuke)
+    watch.py          # Watcher daemon + legacy foreground watch
     __init__.py
   README.md
   LICENSE
@@ -148,5 +169,6 @@ irom-tpu-tools/
 
 ```bash
 tpu --help
-tpu watch --help
+tpu --commands        # cheat-sheet of all commands
+tpu create --help
 ```
