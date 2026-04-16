@@ -95,9 +95,11 @@ def watch_and_run(cfg: WatchConfig, env: TPUEnvConfig) -> None:
 
     print("Starting TPU auto-launcher with:")
     print(f"  TPU Name: {env.tpu_name}")
-    print(f"  Zone: {getattr(env, f'tpu_zone_{cfg.version}')}")
+    zone = getattr(env, f"tpu_zone_{cfg.version}")
+    print(f"  Zone: {zone}")
     print(f"  Project: {env.tpu_project}")
-    print(f"  Service Account: {env.tpu_service_account}")
+    effective_sa = env.service_account_for_zone(zone)
+    print(f"  Service Account: {effective_sa}")
     print(f"  Repo Name: {env.gh_repo_name}")
     bucket = getattr(env, f"tpu_bucket_{cfg.version}")
     print(f"  Bucket: {bucket}")
