@@ -24,7 +24,7 @@ When you make local changes to any file in the package, run `pipx install --forc
 Export the following variables (e.g. in your `~/.bashrc` or `~/.zshrc`):
 
 ```bash
-export TPU_NAME=<tpu_name>
+export TPU_NAME=<tpu_name>  # Unique identifier for the TPU VM. Must be set before each creation. Use format: <tpu_type>-<num_tpus>-<index>-<your_name> (e.g., v6-64-01-lihan)
 export TPU_PROJECT=<gcp_project_id>
 export TPU_ZONE_v4=us-central2-b
 export TPU_ZONE_v5=us-central1-a
@@ -89,7 +89,7 @@ tpu watch v6 -f -n 8 my-branch \
   XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 uv run --group tpu scripts/train.py --config my_config
 ```
 
-> **Note:** `-f` launches the job once and exits. To resume continuous watching (auto-relaunch on preemption), re-run the same command **without** `-f`.
+> **Note:** `-f` launches the job once and exits. To resume continuous watching (auto-relaunch on preemption), re-run the same command **without** `-f`. To monitor the logs, run `tpu tail v6`.
 
 ### How setup works
 
@@ -111,13 +111,13 @@ Replace `v6` with `v4` or `v5` as needed.
 |---|---|
 | `tpu nuke v6` | Kill all running processes on the TPU |
 | `tpu list v6` | List TPUs in the v6 zone |
+| `tpu tail v6` | Tail the most recent log. Default for worker 0 |
 | `tpu delete v6` | Delete the current TPU |
 | `tpu delete-name v6 NAME` | Delete a TPU by name |
 | `tpu v6 setup` | Run the setup step manually (clone + install) |
 | `tpu tmux v6 --session s <cmd>` | Run a command in a tmux session on the TPU |
 | `tpu attach v6 --session s --worker 0` | Attach to a tmux session on worker 0 |
 | `tpu tmux-ls v6` | List tmux sessions |
-| `tpu tail v6 --worker 0` | Tail the most recent log for worker 0 |
 | `tpu tmux-kill-all v6` | Kill all tmux sessions |
 | `tpu kill-jax v6` | Kill all JAX processes |
 | `tpu clean-tmp v6` | Clean `/tmp` on all workers |
