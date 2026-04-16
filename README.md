@@ -4,6 +4,8 @@ Unified TPU utilities and watcher for any repo across **v4 / v5 / v6**.
 
 ## Installation
 
+First, set up the Google Cloud CLI by following the [official installation guide](https://docs.cloud.google.com/sdk/docs/install-sdk).
+
 ```bash
 git clone https://github.com/irom-princeton/irom-tpu-tools.git
 pipx install ./irom-tpu-tools
@@ -33,9 +35,6 @@ export TPU_BUCKET_v4=gs://my-bucket-v4               # ask your project admin
 export TPU_BUCKET_v5=gs://my-bucket-v5               # ask your project admin
 export TPU_BUCKET_v6=gs://my-bucket-v6               # ask your project admin
 export TPU_SERVICE_ACCOUNT=<service_account_email>   # ask your project admin
-# Per-region service accounts are enabled by default (avoids cross-region GCS transfer costs).
-# Set to 0 to fall back to the global TPU_SERVICE_ACCOUNT.
-export TPU_REGION_SA_ENABLED=1
 export GH_REPO_NAME=<github_repo_name>               # repo to clone on the TPU
 export GH_OWNER=<your_github_username>               # owner of the repo/fork
 export GH_TOKEN=<your_github_personal_access_token>  # needs repo read access

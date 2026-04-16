@@ -44,13 +44,7 @@ class TPUEnvConfig:
     wandb_api_key: str
     gh_token: str
     gh_owner: str
-    # Per-region service account feature — disabled by default.
-    use_region_service_accounts: bool = True
-
     def service_account_for_zone(self, zone: str) -> str:
-        """Return the region-pinned SA when the feature is enabled, else the global SA."""
-        if not self.use_region_service_accounts:
-            return self.tpu_service_account
         region = zone_to_region(zone)
         sa = REGION_SERVICE_ACCOUNTS.get(region)
         if sa is None:
@@ -68,8 +62,6 @@ class TPUEnvConfig:
                 raise RuntimeError(f"Missing required environment variable: {name}")
             return val
 
-        use_region_sa = os.environ.get("TPU_REGION_SA_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
-
         return TPUEnvConfig(
             tpu_name=must_get("TPU_NAME"),
             tpu_project=must_get("TPU_PROJECT"),
@@ -84,5 +76,4 @@ class TPUEnvConfig:
             wandb_api_key=must_get("WANDB_API_KEY"),
             gh_token=must_get("GH_TOKEN"),
             gh_owner=must_get("GH_OWNER"),
-            use_region_service_accounts=use_region_sa,
         )
