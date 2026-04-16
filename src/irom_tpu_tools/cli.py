@@ -252,7 +252,8 @@ def _print_tpu_table(rows: list[dict]) -> None:
 
 
 _DINO = r"""
-          / _)
+           ___
+          / `_)
    .-^^^-/ /
 __/       /
 <__.|_|-|_|   < hello from irom dino
