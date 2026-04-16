@@ -2,6 +2,29 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
+import re
+
+
+# Region-specific service accounts and their co-located buckets.
+# Disabled by default; set TPU_REGION_SA_ENABLED=1 to opt in.
+# When enabled, TPU VMs are created with the SA matching their zone's region,
+# avoiding cross-region GCS transfer costs.
+REGION_SERVICE_ACCOUNTS: dict[str, str] = {
+    "us-central1": "tpu-sa-us-central1@mae-irom-lab-guided-data.iam.gserviceaccount.com",
+    "us-central2": "tpu-sa-us-central2@mae-irom-lab-guided-data.iam.gserviceaccount.com",
+    "us-east1": "tpu-sa-us-east1@mae-irom-lab-guided-data.iam.gserviceaccount.com",
+}
+
+REGION_STORAGE_BUCKETS: dict[str, str] = {
+    "us-central1": "gs://v5_central1_a",
+    "us-central2": "gs://pi0-cot",
+    "us-east1": "gs://v6_east1d",
+}
+
+
+def zone_to_region(zone: str) -> str:
+    """Strip the trailing zone letter from a GCP zone, e.g. us-east1-d → us-east1."""
+    return re.sub(r"-[a-z]$", "", zone)
 
 
 @dataclass(frozen=True)
@@ -21,6 +44,15 @@ class TPUEnvConfig:
     wandb_api_key: str
     gh_token: str
     gh_owner: str
+    def service_account_for_zone(self, zone: str) -> str:
+        region = zone_to_region(zone)
+        sa = REGION_SERVICE_ACCOUNTS.get(region)
+        if sa is None:
+            raise RuntimeError(
+                f"No region service account configured for zone '{zone}' (region '{region}'). "
+                f"Known regions: {list(REGION_SERVICE_ACCOUNTS)}"
+            )
+        return sa
 
     @property
     def zones(self) -> dict[str, str]:

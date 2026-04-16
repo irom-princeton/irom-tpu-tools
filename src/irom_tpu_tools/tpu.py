@@ -198,6 +198,7 @@ class TPUManager:
 
     def create(self, version: Literal["v4", "v5", "v6"], *, tpu_num: int, topology: str | None = None) -> bool:
         zone = self._zone_for(version)
+        sa = self.env.service_account_for_zone(zone)
         common = [
             "gcloud",
             "alpha",
@@ -211,7 +212,7 @@ class TPUManager:
             "--project",
             self.env.tpu_project,
             "--service-account",
-            self.env.tpu_service_account,
+            sa,
             "--spot",
         ]
         if version == "v4":

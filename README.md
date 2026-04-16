@@ -4,6 +4,8 @@ Unified TPU utilities and background watcher for any repo across **v4 / v5 / v6*
 
 ## Installation
 
+First, set up the Google Cloud CLI by following the [official installation guide](https://docs.cloud.google.com/sdk/docs/install-sdk).
+
 ```bash
 git clone https://github.com/irom-princeton/irom-tpu-tools.git
 pipx install ./irom-tpu-tools
@@ -25,14 +27,14 @@ When you make local changes to any file in the package, run `pipx install --forc
 Export the following variables (e.g. in your `~/.bashrc` or `~/.zshrc`):
 
 ```bash
-export TPU_NAME=<default_tpu_name>                   # optional; used when --name is omitted
-export TPU_PROJECT=<gcp_project_id>
+export TPU_NAME=<default_tpu_name>                   # optional fallback when --name is omitted. Format: <tpu_type>-<num_tpus>-<index>-<your_name> (e.g. v6-64-01-lihan)
+export TPU_PROJECT=<gcp_project_id>                  # ask your project admin
 export TPU_ZONE_v4=us-central2-b
 export TPU_ZONE_v5=us-central1-a
 export TPU_ZONE_v6=us-east1-d
-export TPU_BUCKET_v4=gs://my-bucket-v4
-export TPU_BUCKET_v5=gs://my-bucket-v5
-export TPU_BUCKET_v6=gs://my-bucket-v6
+export TPU_BUCKET_v4=gs://my-bucket-v4               # ask your project admin
+export TPU_BUCKET_v5=gs://my-bucket-v5               # ask your project admin
+export TPU_BUCKET_v6=gs://my-bucket-v6               # ask your project admin
 export TPU_SERVICE_ACCOUNT=<service_account_email>   # ask your project admin
 export GH_REPO_NAME=<github_repo_name>               # repo to clone on the TPU
 export GH_OWNER=<your_github_username>               # owner of the repo/fork
@@ -41,6 +43,8 @@ export WANDB_API_KEY=<your_wandb_api_key>
 ```
 
 `GH_OWNER` / `GH_TOKEN` are used to clone via HTTPS (`https://<token>@github.com/<owner>/<repo>`), so this works with your own fork — you do **not** need to be the upstream repo owner.
+
+After this, you can run `export TPU_NAME=pi0 && tpu v4` to initialize. You will be prompted with some questions from google CLI, and answer yes. After the set up, type and run `exit` in your terminal to terminate the setup process.
 
 ---
 
