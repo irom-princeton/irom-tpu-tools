@@ -59,25 +59,35 @@ After this, you can run `export TPU_NAME=pi0 && tpu v4` to initialize. You will 
 ### Monitoring Status
 
 ```bash
-tpu list                    # check all running tpu jobs
-tpu status                  # check all tpu jobs managed by you
+tpu list                 # check all running tpu jobs
+tpu status               # check all tpu jobs managed by you
 ```
 
 ### Creating a TPU instance
 
 Different options for creating a tpu instance:
 ```bash
-tpu create v6 --name my-tpu -n 8 # create bare tpu instance
-tpu create v6 --name my-tpu -n 8 --repo usrname/reponame  --branch main --setup-cmd "..."  # create tpu instance with cloned repo and custom setup command
+# create bare tpu instance
+tpu create v6 --name my-tpu -n 8 
+# create tpu instance with cloned repo and custom setup command
+
+tpu create v6 --name my-tpu -n 8 --repo usrname/reponame  --branch main --setup-cmd "..."  
+
+# create tpu instance with repo, setup, and command that will relaunch after preemption
 tpu create v6 --name my-tpu -n 8 --repo usrname/reponame  --branch main --setup-cmd "..." \
-  -- XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 uv run --group tpu scripts/train.py --config my_config # create tpu instance with repo, setup, and command that will relaunch after preemption
+  -- XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 uv run --group tpu scripts/train.py --config my_config 
 ```
 
 To access your instance after creation
 ```bash
-tpu attach my-tpu                   # attach to the training tmux session on worker 0 (Ctrl-B+D to exit)
-tpu tail my-tpu                     # read final lines of output
-tpu info my-tpu                     # get information about the tpu
+# attach to the training tmux session on worker 0 (Ctrl-B+D to exit)
+tpu attach my-tpu 
+
+# read final lines of output
+tpu tail my-tpu
+
+# get tpu info
+tpu info my-tpu
 ```
 
 ### Stopping / Restarting / Deleting a TPU instance
@@ -85,12 +95,22 @@ tpu info my-tpu                     # get information about the tpu
 `tpu stop` and `tpu start` both **preserve the TPU's resource allocation** — the VM and its attached disk stay provisioned, so your reservation/quota slot is held across the stop. Only `tpu delete` releases allocation.
 
 ```bash
-tpu stop my-tpu                      # stop watcher + stop the TPU (allocation preserved)
-tpu start my-tpu                     # restart and respawn watcher with the saved config
-tpu start my-tpu --repo D/E --branch main --setup-cmd "uv sync" \
-  -- python scripts/other_train.py   # restart with a NEW repo / setup / command
-tpu delete my-tpu                    # stop watcher + delete TPU (releases allocation)
+# stop watcher + stop the TPU (allocation preserved)
+tpu stop my-tpu
+
+# restart and respawn watcher with the saved config
+tpu start my-tpu
+
+# restart with a NEW repo / setup / command
+tpu start my-tpu --repo usrname/reponame --branch main --setup-cmd "..." -- python scripts/other_train.py
+
+# stop watcher + delete TPU (releases allocation)
+tpu delete my-tpu
 ```
+
+---
+
+## Full List of Commands
 
 ### 📋 Monitoring
 
@@ -161,15 +181,4 @@ irom-tpu-tools/
     __init__.py
   README.md
   LICENSE
-```
-
----
-
-## Help
-
-```bash
-tpu --help
-tpu --commands        # cheat-sheet of all commands
-tpu create --help
-tpu start --help
 ```
