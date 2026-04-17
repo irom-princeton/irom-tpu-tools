@@ -68,9 +68,9 @@ tpu status               # check all tpu jobs managed by you
 Different options for creating a tpu instance:
 ```bash
 # create bare tpu instance
-tpu create v6 --name my-tpu -n 8 
-# create tpu instance with cloned repo and custom setup command
+tpu create v6 --name my-tpu -n 8
 
+# create tpu instance with cloned repo and custom setup command
 tpu create v6 --name my-tpu -n 8 --repo usrname/reponame  --branch main --setup-cmd "..."  
 
 # create tpu instance with repo, setup, and command that will relaunch after preemption
