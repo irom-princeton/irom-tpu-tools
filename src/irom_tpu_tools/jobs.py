@@ -17,7 +17,11 @@ TPUVersion = Literal["v4", "v5", "v6"]
 
 @dataclass
 class JobConfig:
-    """Everything needed to recreate a TPU and relaunch training."""
+    """Everything needed to recreate a TPU and relaunch training.
+
+    `repo` is "owner/name" for a repo-backed job, or "" for a bare TPU
+    (no clone, no setup_cmd executed inside a repo).
+    """
 
     name: str
     version: TPUVersion
@@ -25,6 +29,7 @@ class JobConfig:
     command: str
     branch: str
     setup_cmd: str
+    repo: str = ""
     topology: str | None = None
 
     def save(self) -> Path:
@@ -40,7 +45,18 @@ class JobConfig:
         if not p.exists():
             raise FileNotFoundError(f"No job config for '{name}' at {p}")
         data = json.loads(p.read_text())
+        # Drop unknown keys so older/newer configs stay loadable
+        allowed = {f for f in JobConfig.__dataclass_fields__}
+        data = {k: v for k, v in data.items() if k in allowed}
         return JobConfig(**data)
+
+    @property
+    def repo_owner(self) -> str:
+        return self.repo.split("/", 1)[0] if "/" in self.repo else ""
+
+    @property
+    def repo_name(self) -> str:
+        return self.repo.split("/", 1)[1] if "/" in self.repo else ""
 
     @staticmethod
     def all_names() -> list[str]:

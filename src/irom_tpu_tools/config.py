@@ -71,7 +71,10 @@ class TPUEnvConfig:
                 raise RuntimeError(f"Missing required environment variable: {name}")
             return val
 
-        tpu_name = must_get("TPU_NAME") if require_tpu_name else os.environ.get("TPU_NAME", "").strip()
+        def maybe_get(name: str) -> str:
+            return os.environ.get(name, "").strip()
+
+        tpu_name = must_get("TPU_NAME") if require_tpu_name else maybe_get("TPU_NAME")
 
         return TPUEnvConfig(
             tpu_name=tpu_name,
@@ -83,8 +86,10 @@ class TPUEnvConfig:
             tpu_bucket_v5=must_get("TPU_BUCKET_v5"),
             tpu_bucket_v6=must_get("TPU_BUCKET_v6"),
             tpu_service_account=must_get("TPU_SERVICE_ACCOUNT"),
-            gh_repo_name=must_get("GH_REPO_NAME"),
             wandb_api_key=must_get("WANDB_API_KEY"),
-            gh_token=must_get("GH_TOKEN"),
-            gh_owner=must_get("GH_OWNER"),
+            # Repo-related vars are optional fallback defaults; a job's --repo
+            # flag takes precedence and bare-TPU mode needs none of these.
+            gh_repo_name=maybe_get("GH_REPO_NAME"),
+            gh_token=maybe_get("GH_TOKEN"),
+            gh_owner=maybe_get("GH_OWNER"),
         )

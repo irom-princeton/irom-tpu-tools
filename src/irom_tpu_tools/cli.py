@@ -43,6 +43,7 @@ def _print_commands() -> None:
                 ("tpu list v4", "List TPUs in a specific zone"),
                 ("tpu status", "Show status of all managed jobs"),
                 ("tpu status my-tpu", "Show status of a specific job"),
+                ("tpu info my-tpu", "Show full job details (repo, setup, command, created, preemptions)"),
                 ("tpu logs my-tpu", "View background watcher logs"),
                 ("tpu logs my-tpu -f", "Follow watcher logs in real time"),
             ],
@@ -106,8 +107,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_create.add_argument("version", choices=["v4", "v5", "v6"], help="TPU version")
     p_create.add_argument("--name", default=None, help="TPU name (default: $TPU_NAME env var)")
     p_create.add_argument("--tpu-num", "-n", type=int, default=8, help="TPU chips")
-    p_create.add_argument("--branch", "-b", default="main", help="Git branch to checkout")
-    p_create.add_argument("--setup-cmd", "-s", default="uv sync", help="Setup command after clone")
+    p_create.add_argument("--repo", default=None, help="GitHub repo 'owner/name' to clone (omit for bare TPU)")
+    p_create.add_argument("--branch", "-b", default="main", help="Git branch to checkout (ignored without --repo)")
+    p_create.add_argument("--setup-cmd", "-s", default="uv sync", help="Setup command run inside the cloned repo (ignored without --repo)")
 
     # --- watch (legacy, kept for backwards compat) ---
     p_watch = sub.add_parser("watch", help="[Legacy] Watch TPU state in foreground")
@@ -123,6 +125,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_status = sub.add_parser("status", help="Show status of managed TPU jobs")
     p_status.add_argument("name", nargs="?", default=None, help="Specific job name (omit for all)")
 
+    # --- info: show full details of a single managed job ---
+    p_info = sub.add_parser("info", help="Show full details of a managed TPU job (repo, setup, command, created, preemptions)")
+    p_info.add_argument("name", nargs="?", default=None, help="Job name (default: $TPU_NAME env var)")
+
     # --- logs: tail watcher log ---
     p_logs = sub.add_parser("logs", help="Tail the watcher log for a job")
     _add_name_arg(p_logs)
@@ -133,11 +139,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_delete = sub.add_parser("delete", help="Delete a TPU (also stops watcher)")
     _add_name_arg(p_delete)
 
-    p_stop = sub.add_parser("stop", help="Stop a TPU (preserve allocation)")
+    p_stop = sub.add_parser("stop", help="Stop a TPU (preserve allocation; also stops watcher)")
     _add_name_arg(p_stop)
 
-    p_start = sub.add_parser("start", help="Start a stopped TPU")
+    p_start = sub.add_parser(
+        "start",
+        help="Start a stopped TPU and respawn its watcher (optionally overriding repo/branch/setup/command)",
+    )
     _add_name_arg(p_start)
+    p_start.add_argument("--repo", default=None, help="New repo 'owner/name' (use '' for bare); overrides saved value")
+    p_start.add_argument("--branch", "-b", default=None, help="New branch; overrides saved value")
+    p_start.add_argument("--setup-cmd", "-s", default=None, help="New setup command; overrides saved value")
 
     p_tmux = sub.add_parser("tmux", help="Run a tmux command on all workers")
     _add_name_arg(p_tmux)
@@ -330,6 +342,86 @@ def _do_status(env: TPUEnvConfig, name: str | None) -> int:
     return 0
 
 
+# ---- info ----
+
+
+def _gcloud_describe_json(project: str, zone: str, name: str, timeout_s: int = 20) -> dict:
+    """Query full TPU details via gcloud describe --format=json. Returns {} on error."""
+    try:
+        proc = subprocess.run(
+            [
+                "gcloud", "alpha", "compute", "tpus", "tpu-vm", "describe", name,
+                "--zone", zone, "--project", project, "--format", "json",
+            ],
+            capture_output=True, text=True, timeout=timeout_s,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return {}
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return {}
+    try:
+        return json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return {}
+
+
+def _do_info(env: TPUEnvConfig, name: str | None) -> int:
+    """Show full details for a single managed job."""
+    from rich.console import Console
+    from rich.text import Text
+
+    tpu_name = name or env.tpu_name
+    if not tpu_name:
+        raise SystemExit("Error: no TPU name provided and TPU_NAME is not set")
+
+    try:
+        job = JobConfig.load(tpu_name)
+    except FileNotFoundError:
+        print(f"No managed job named '{tpu_name}'.")
+        return 1
+
+    zone = env.zones[job.version]
+    details = _gcloud_describe_json(env.tpu_project, zone, tpu_name)
+    state = details.get("state", "UNKNOWN")
+    health = details.get("health", "-")
+    created = details.get("createTime", "-")
+    accel = (details.get("acceleratorType") or f"{job.version}-{job.tpu_num}").rsplit("/", 1)[-1]
+
+    watcher = "running" if is_watcher_running(tpu_name) else "stopped"
+    running = running_since(tpu_name) or "-"
+    pcount = preemption_count(tpu_name)
+    preempted = last_preempted(tpu_name) or "-"
+
+    c = Console()
+    c.print()
+    c.print(Text(f"  TPU: {tpu_name}", style="bold bright_cyan"))
+    c.print(Text("  ─" * 28, style="dim"))
+
+    rows = [
+        ("Accelerator",    accel),
+        ("Zone",           zone),
+        ("State",          state),
+        ("Health",         health),
+        ("Created",        created),
+        ("Watcher",        watcher),
+        ("Running since",  running),
+        ("Preemptions",    str(pcount)),
+        ("Last preempted", preempted),
+        ("Repo",           job.repo or "(bare — no clone)"),
+        ("Branch",         job.branch if job.repo else "-"),
+        ("Setup",          job.setup_cmd if job.repo else "-"),
+        ("Command",        job.command or "-"),
+    ]
+    label_w = max(len(k) for k, _ in rows)
+    for k, v in rows:
+        line = Text("  ")
+        line.append(f"{k:<{label_w}}  ", style="bold yellow")
+        line.append(str(v))
+        c.print(line)
+    c.print()
+    return 0
+
+
 # ---- create ----
 
 
@@ -345,6 +437,14 @@ def _do_create(ns: argparse.Namespace, env: TPUEnvConfig, extra_args: list[str])
     command = " ".join(extra_args)  # empty string if no command provided
     topology = _map_v4_topology(ns.tpu_num) if ns.version == "v4" else None
 
+    # --repo resolution: explicit flag wins; else fall back to env vars; else bare.
+    if ns.repo is not None:
+        repo = ns.repo.strip()
+    elif env.gh_owner and env.gh_repo_name:
+        repo = f"{env.gh_owner}/{env.gh_repo_name}"
+    else:
+        repo = ""
+
     job = JobConfig(
         name=tpu_name,
         version=ns.version,
@@ -352,6 +452,7 @@ def _do_create(ns: argparse.Namespace, env: TPUEnvConfig, extra_args: list[str])
         command=command,
         branch=ns.branch,
         setup_cmd=ns.setup_cmd,
+        repo=repo,
         topology=topology,
     )
 
@@ -360,6 +461,7 @@ def _do_create(ns: argparse.Namespace, env: TPUEnvConfig, extra_args: list[str])
     # Spawn background daemon — it handles create, setup, training, and recovery
     pid = spawn_watcher(job, env)
     print(f"Submitted TPU job '{tpu_name}' ({ns.version}-{ns.tpu_num})")
+    print(f"  Repo:    {repo or '(bare TPU — no clone)'}")
     if command:
         print(f"  Command: {command}")
     print(f"  Watcher PID: {pid}")
@@ -369,6 +471,87 @@ def _do_create(ns: argparse.Namespace, env: TPUEnvConfig, extra_args: list[str])
     print(f"  tpu logs {tpu_name:<14s} View watcher log")
     print(f"  tpu logs {tpu_name:<14s} -f  Follow log in real time")
     print(f"  tpu delete {tpu_name:<12s} Stop and delete")
+    return 0
+
+
+# ---- start (resume job with optional overrides) ----
+
+
+def _do_start(ns: argparse.Namespace, env: TPUEnvConfig, extra_args: list[str]) -> int:
+    """Resume a stopped TPU and respawn its watcher, with optional in-place overrides
+    for --repo/--branch/--setup-cmd/-- <command>. JobConfig is rewritten if anything
+    changed. If --repo changes, the old and new clone directories on the TPU are
+    wiped so the new repo is cloned fresh."""
+    import time
+
+    from .watch import _do_setup_and_training, _split_repo, spawn_watcher
+
+    tpu_name = ns.name or env.tpu_name
+    if not tpu_name:
+        raise SystemExit("Error: no TPU name provided and TPU_NAME is not set")
+
+    # Fall back to a plain gcloud start if there's no managed job on disk.
+    try:
+        job = JobConfig.load(tpu_name)
+    except FileNotFoundError:
+        print(f"No managed job for '{tpu_name}' — running a plain start (no watcher).")
+        mgr = _resolve_mgr(env, tpu_name)
+        ok = mgr.start(mgr.version)
+        return 0 if ok else 1
+
+    # Overlay overrides onto the saved config.
+    old_repo = job.repo
+    override_any = False
+    if ns.repo is not None:
+        new_repo = ns.repo.strip()
+        if new_repo != job.repo:
+            job.repo = new_repo
+            override_any = True
+    if ns.branch is not None and ns.branch != job.branch:
+        job.branch = ns.branch
+        override_any = True
+    if ns.setup_cmd is not None and ns.setup_cmd != job.setup_cmd:
+        job.setup_cmd = ns.setup_cmd
+        override_any = True
+    if extra_args:
+        new_cmd = " ".join(extra_args)
+        if new_cmd != job.command:
+            job.command = new_cmd
+            override_any = True
+
+    if override_any:
+        job.save()
+        print(f"Updated job config for '{tpu_name}'.")
+
+    mgr = _resolve_mgr(env, tpu_name)
+    v = mgr.version
+
+    print(f"Starting TPU '{tpu_name}'...")
+    if not mgr.start(v):
+        return 1
+
+    # Give the TPU a moment to fully come up before SSHing.
+    time.sleep(10)
+
+    # If the repo changed, wipe old + new clone dirs so setup clones fresh.
+    if old_repo != job.repo:
+        _, old_name = _split_repo(old_repo)
+        _, new_name = _split_repo(job.repo)
+        dirs = [f"~/{d}" for d in {old_name, new_name} if d]
+        if dirs:
+            print(f"Repo changed ({old_repo or '(bare)'} → {job.repo or '(bare)'}); wiping: {' '.join(dirs)}")
+            mgr.raw(v, cmd=f"rm -rf {' '.join(dirs)}", worker="all")
+
+    ok = _do_setup_and_training(
+        mgr, v, env,
+        command=job.command, branch=job.branch, setup_cmd=job.setup_cmd, repo=job.repo,
+    )
+    if not ok:
+        print("Setup/launch failed. Watcher NOT spawned — fix the error and re-run `tpu start`.")
+        return 1
+
+    pid = spawn_watcher(job, env)
+    print(f"Watcher respawned (PID {pid}). Log: ~/.tpu-jobs/{tpu_name}/watch.log")
     return 0
 
 
@@ -435,6 +618,11 @@ def main(argv: list[str] | None = None) -> int:
         env = TPUEnvConfig.from_env(require_tpu_name=False)
         return _do_status(env, ns.name)
 
+    # --- info ---
+    if ns.cmd == "info":
+        env = TPUEnvConfig.from_env(require_tpu_name=not ns.name)
+        return _do_info(env, ns.name)
+
     # --- logs ---
     if ns.cmd == "logs":
         return _do_logs(ns)
@@ -476,15 +664,27 @@ def main(argv: list[str] | None = None) -> int:
             print(f"TPU '{tpu_name}' not found (already deleted or never created). Job state cleaned up.")
             return 0
 
+    # stop also stops the watcher so it doesn't fight the stop and recreate the TPU
+    if ns.cmd == "stop":
+        tpu_name = name or env.tpu_name
+        if not tpu_name:
+            raise SystemExit("Error: no TPU name provided and TPU_NAME is not set")
+        if is_watcher_running(tpu_name):
+            print(f"Stopping watcher for '{tpu_name}'...")
+            stop_watcher(tpu_name)
+        mgr = _resolve_mgr(env, name)
+        ok = mgr.stop(mgr.version)
+        return 0 if ok else 1
+
+    # start resumes a stopped TPU + respawns the watcher; supports in-place config overrides
+    if ns.cmd == "start":
+        extra = unknown
+        if extra and extra[0] == "--":
+            extra = extra[1:]
+        return _do_start(ns, env, extra)
+
     mgr = _resolve_mgr(env, name)
     v = mgr.version
-
-    if ns.cmd == "stop":
-        ok = mgr.stop(v)
-        return 0 if ok else 1
-    if ns.cmd == "start":
-        ok = mgr.start(v)
-        return 0 if ok else 1
     if ns.cmd == "tmux":
         cmd = " ".join(ns.rest) if getattr(ns, "rest", None) else ""
         ok = mgr.tmux(v, cmd=cmd, session=ns.session)

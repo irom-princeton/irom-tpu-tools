@@ -36,59 +36,87 @@ class WatchConfig:
     setup_cmd: str = "uv sync"  # commands to run after clone, e.g. "uv sync && uv pip install -e ."
 
 
-def _build_setup_script(version: str, env: TPUEnvConfig, setup_cmd: str = "uv sync") -> str:
+def _split_repo(repo: str) -> tuple[str, str]:
+    """Split 'owner/name' into (owner, name); return ('', '') if empty/invalid."""
+    if "/" not in repo:
+        return ("", "")
+    owner, _, name = repo.partition("/")
+    return (owner.strip(), name.strip())
+
+
+def _build_setup_script(
+    version: str,
+    env: TPUEnvConfig,
+    setup_cmd: str = "uv sync",
+    repo: str = "",
+) -> str:
+    """Build the remote setup bash script.
+
+    If `repo` is empty (bare TPU), the clone step and $SETUP_CMD execution
+    are skipped — only baseline env vars and `uv` install happen. Otherwise,
+    `repo` is "owner/name" and the repo is cloned under $HOME if missing.
+    """
     bucket_env = {
         "v4": env.tpu_bucket_v4,
         "v5": env.tpu_bucket_v5,
         "v6": env.tpu_bucket_v6,
     }[version]
-    setup_tpl = Template(r"""set -euo pipefail
+    gh_owner, gh_repo = _split_repo(repo)
 
-            # 1. Set up environment variables
-            echo 'export WANDB_API_KEY="${WANDB_API_KEY}"' >> ~/.zshrc
-            echo 'export OPENPI_DATA_HOME="${OPENPI_DATA_HOME}"' >> ~/.zshrc
-            echo 'export GH_TOKEN="${GH_TOKEN}"' >> ~/.zshrc
-            echo 'export GH_OWNER="${GH_OWNER}"' >> ~/.zshrc
-            echo 'export GH_REPO="${GH_REPO}"' >> ~/.zshrc
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
-            # 2. Download uv
-            curl -LsSf https://astral.sh/uv/install.sh | sh
+    baseline = r"""set -euo pipefail
 
-            # 3. Clone the repository and set up deps only if missing
-            source ~/.zshrc
-            if [ ! -d "${GH_REPO}/.git" ]; then
-            git clone --recurse-submodules "https://${GH_TOKEN}@github.com/${GH_OWNER}/${GH_REPO}.git"
-            cd ${GH_REPO}
-            ${SETUP_CMD}
-            fi
-            """)
-    return setup_tpl.safe_substitute(
+echo 'export WANDB_API_KEY="${WANDB_API_KEY}"' >> ~/.zshrc
+echo 'export OPENPI_DATA_HOME="${OPENPI_DATA_HOME}"' >> ~/.zshrc
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+curl -LsSf https://astral.sh/uv/install.sh | sh
+"""
+
+    repo_block = r"""
+echo 'export GH_TOKEN="${GH_TOKEN}"' >> ~/.zshrc
+echo 'export GH_OWNER="${GH_OWNER}"' >> ~/.zshrc
+echo 'export GH_REPO="${GH_REPO}"' >> ~/.zshrc
+source ~/.zshrc
+if [ ! -d "${GH_REPO}/.git" ]; then
+    git clone --recurse-submodules "https://${GH_TOKEN}@github.com/${GH_OWNER}/${GH_REPO}.git"
+    cd ${GH_REPO}
+    ${SETUP_CMD}
+fi
+""" if repo else ""
+
+    tpl = Template(baseline + repo_block)
+    return tpl.safe_substitute(
         OPENPI_DATA_HOME=f"{bucket_env}/cache",
         GH_TOKEN=env.gh_token,
         WANDB_API_KEY=env.wandb_api_key,
-        GH_REPO=env.gh_repo_name,
-        GH_OWNER=env.gh_owner,
+        GH_REPO=gh_repo,
+        GH_OWNER=gh_owner,
         SETUP_CMD=setup_cmd,
     )
 
 
-def build_setup_cmd(version: str, env: TPUEnvConfig, setup_cmd: str = "uv sync") -> str:
-    """Build the remote setup command identical to watch()'s setup step.
-
-    Returns a shell command suitable for execution over SSH.
-    """
-    setup_script = _build_setup_script(version, env, setup_cmd)
+def build_setup_cmd(
+    version: str,
+    env: TPUEnvConfig,
+    setup_cmd: str = "uv sync",
+    repo: str = "",
+) -> str:
+    """Build the remote setup command suitable for execution over SSH."""
+    setup_script = _build_setup_script(version, env, setup_cmd, repo)
     encoded = base64.b64encode(setup_script.encode()).decode().replace("\n", "")
     return f"bash -lc 'echo {encoded} | base64 -d | bash -l -s'"
 
 
-def run_setup(version: str, env: TPUEnvConfig, *, worker: str | None = "all", setup_cmd: str = "uv sync") -> int:
-    """Run the setup step on the TPU worker(s).
-
-    This is exposed so callers can do: `tpu v4 setup`.
-    """
+def run_setup(
+    version: str,
+    env: TPUEnvConfig,
+    *,
+    worker: str | None = "all",
+    setup_cmd: str = "uv sync",
+    repo: str = "",
+) -> int:
+    """Run the setup step on the TPU worker(s). Exposed for `tpu v4 setup`."""
     mgr = TPUManager(env)
-    remote_cmd = build_setup_cmd(version, env, setup_cmd)
+    remote_cmd = build_setup_cmd(version, env, setup_cmd, repo)
     return mgr.raw(version, cmd=remote_cmd, worker=worker)
 
 
@@ -100,10 +128,11 @@ def _do_setup_and_training(
     command: str,
     branch: str,
     setup_cmd: str,
+    repo: str,
 ) -> bool:
     """Run setup + optionally launch training. Returns True on success."""
-    print(f"{_ts()} - Setting up environment and repository...")
-    remote_cmd = build_setup_cmd(version, env, setup_cmd)
+    print(f"{_ts()} - Running setup on workers...")
+    remote_cmd = build_setup_cmd(version, env, setup_cmd, repo)
     rc = mgr.raw(version, cmd=remote_cmd, worker="all")
     if rc != 0:
         print(f"{_ts()} - Setup failed (rc={rc}).")
@@ -114,11 +143,16 @@ def _do_setup_and_training(
         return True
 
     print(f"{_ts()} - Starting training...")
-    train_cmd = (
-        f"source ~/.zshrc && cd {env.gh_repo_name} && "
-        f"git fetch origin && git checkout {branch} && git pull origin {branch} && "
-        f"{command}"
-    )
+    _, gh_repo = _split_repo(repo)
+    if gh_repo:
+        train_cmd = (
+            f"source ~/.zshrc && cd {gh_repo} && "
+            f"git fetch origin && git checkout {branch} && git pull origin {branch} && "
+            f"{command}"
+        )
+    else:
+        # Bare TPU: run the command from $HOME with no repo fetch/checkout.
+        train_cmd = f"source ~/.zshrc && {command}"
     if not mgr.tmux(version, cmd=train_cmd, session="tpu"):
         print(f"{_ts()} - Launch failed/SSH timed out.")
         return False
@@ -145,7 +179,7 @@ def create_and_launch(job: JobConfig, env: TPUEnvConfig) -> bool:
 
     return _do_setup_and_training(
         mgr, job.version, env,
-        command=job.command, branch=job.branch, setup_cmd=job.setup_cmd,
+        command=job.command, branch=job.branch, setup_cmd=job.setup_cmd, repo=job.repo,
     )
 
 
@@ -217,7 +251,7 @@ def watch_loop(job: JobConfig, env: TPUEnvConfig) -> None:
 
             ok = _do_setup_and_training(
                 mgr, job.version, env,
-                command=job.command, branch=job.branch, setup_cmd=job.setup_cmd,
+                command=job.command, branch=job.branch, setup_cmd=job.setup_cmd, repo=job.repo,
             )
             if ok:
                 record_running(job.name)
@@ -347,9 +381,11 @@ def watch_and_run(cfg: WatchConfig, env: TPUEnvConfig) -> None:
                 print(f"{_ts()} - No command provided. Pass the command to run after the branch name.")
                 sleep(mgr.sleep_secs)
                 continue
+            legacy_repo = f"{env.gh_owner}/{env.gh_repo_name}" if (env.gh_owner and env.gh_repo_name) else ""
             ok = _do_setup_and_training(
                 mgr, cfg.version, env,
-                command=" ".join(cfg.extra_args), branch=cfg.branch, setup_cmd=cfg.setup_cmd,
+                command=" ".join(cfg.extra_args), branch=cfg.branch,
+                setup_cmd=cfg.setup_cmd, repo=legacy_repo,
             )
             if not ok:
                 sleep(mgr.sleep_secs)

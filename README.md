@@ -13,9 +13,13 @@ pipx install ./irom-tpu-tools
 # Ensure ~/.local/bin is on PATH
 export PATH="$HOME/.local/bin:$PATH"
 
+# set up tab-completion for tpu name (optional)
+tpu install-completion
+source ~/.bashrc
+
 # Verify
-tpu --help       # 
-tpu --commands   # command cheat sheet
+tpu --help 
+tpu --commands # command cheat sheet
 ```
 
 When you make local changes to any file in the package, run `pipx install --force ./irom-tpu-tools` for it to take effect.
@@ -36,10 +40,12 @@ export TPU_BUCKET_v4=gs://my-bucket-v4               # ask your project admin
 export TPU_BUCKET_v5=gs://my-bucket-v5               # ask your project admin
 export TPU_BUCKET_v6=gs://my-bucket-v6               # ask your project admin
 export TPU_SERVICE_ACCOUNT=<service_account_email>   # ask your project admin
+export WANDB_API_KEY=<your_wandb_api_key>
+
+# Optional — used as defaults when `tpu create --repo` is omitted.
 export GH_REPO_NAME=<github_repo_name>               # repo to clone on the TPU
 export GH_OWNER=<your_github_username>               # owner of the repo/fork
 export GH_TOKEN=<your_github_personal_access_token>  # needs repo read access
-export WANDB_API_KEY=<your_wandb_api_key>
 ```
 
 `GH_OWNER` / `GH_TOKEN` are used to clone via HTTPS (`https://<token>@github.com/<owner>/<repo>`), so this works with your own fork — you do **not** need to be the upstream repo owner.
@@ -50,51 +56,41 @@ After this, you can run `export TPU_NAME=pi0 && tpu v4` to initialize. You will 
 
 ## Quickstart
 
-`tpu create` is the main entrypoint. It provisions the TPU, runs setup, launches training in a tmux session, and **spawns a background daemon** that monitors the TPU and automatically recreates it + relaunches training on preemption.
+### Monitoring Status
 
 ```bash
-# Submit a job — returns immediately; watcher runs in the background.
-tpu create v6 --name my-tpu -n 8 \
-  -- XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 uv run --group tpu scripts/train.py --config my_config
-
-# Check what's going on.
-tpu status                    # all managed jobs
-tpu logs tpu-name -f            # follow the watcher log
-
-# Attach to the training tmux session on worker 0.
-tpu attach tpu-name
-
-# When you're done.
-tpu delete tpu-name             # stops watcher + deletes TPU
+tpu list                    # check all running tpu jobs
+tpu status                  # check all tpu jobs managed by you
 ```
 
-Everything after `--` is the training command. It will be run from inside the cloned repo, after `git fetch && git checkout <branch> && git pull`.
+### Creating a TPU instance
 
----
+Different options for creating a tpu instance:
+```bash
+tpu create v6 --name my-tpu -n 8 # create bare tpu instance
+tpu create v6 --name my-tpu -n 8 --repo usrname/reponame  --branch main --setup-cmd "..."  # create tpu instance with cloned repo and custom setup command
+tpu create v6 --name my-tpu -n 8 --repo usrname/reponame  --branch main --setup-cmd "..." \
+  -- XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 uv run --group tpu scripts/train.py --config my_config # create tpu instance with repo, setup, and command that will relaunch after preemption
+```
 
-## Commands
+To access your instance after creation
+```bash
+tpu attach my-tpu                   # attach to the training tmux session on worker 0 (Ctrl-B+D to exit)
+tpu tail my-tpu                     # read final lines of output
+tpu info my-tpu                     # get information about the tpu
+```
 
-Most per-TPU commands take a TPU **name** and auto-detect the version/zone by querying gcloud. If the name is omitted, `$TPU_NAME` is used.
+### Stopping / Restarting / Deleting a TPU instance
 
-### 🚀 Lifecycle
+`tpu stop` and `tpu start` both **preserve the TPU's resource allocation** — the VM and its attached disk stay provisioned, so your reservation/quota slot is held across the stop. Only `tpu delete` releases allocation.
 
-| Command | Description |
-|---|---|
-| `tpu create <version> --name NAME -n N [-b BRANCH] [-s SETUP] -- <cmd...>` | Create TPU, setup, launch training, start background watcher |
-| `tpu delete [NAME]` | Delete the TPU and stop its background watcher |
-| `tpu stop [NAME]` | Stop the TPU (preserve allocation; can restart later) |
-| `tpu start [NAME]` | Restart a stopped TPU |
-
-`create` flags:
-
-| Flag | Description |
-|---|---|
-| `version` | `v4`, `v5`, or `v6` (positional, required) |
-| `--name` | TPU name (default: `$TPU_NAME`) |
-| `-n / --tpu-num` | Number of chips (v4: 4/8/16/32 · v5: 16/32/64 · v6: 8/16/32/64/128) |
-| `-b / --branch` | Git branch to check out (default: `main`) |
-| `-s / --setup-cmd` | Shell command(s) to run after cloning the repo (default: `uv sync`) |
-| `-- <cmd...>` | Training command — everything after `--` |
+```bash
+tpu stop my-tpu                      # stop watcher + stop the TPU (allocation preserved)
+tpu start my-tpu                     # restart and respawn watcher with the saved config
+tpu start my-tpu --repo D/E --branch main --setup-cmd "uv sync" \
+  -- python scripts/other_train.py   # restart with a NEW repo / setup / command
+tpu delete my-tpu                    # stop watcher + delete TPU (releases allocation)
+```
 
 ### 📋 Monitoring
 
@@ -175,4 +171,5 @@ irom-tpu-tools/
 tpu --help
 tpu --commands        # cheat-sheet of all commands
 tpu create --help
+tpu start --help
 ```
