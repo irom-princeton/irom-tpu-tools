@@ -3,7 +3,7 @@ name = "irom-tpu-tools"
 version = "0.1.0"
 description = "Unified TPU utils and watch runner for v4/v5/v6"
 readme = "README.md"
-requires-python = ">=3.10,<3.14"
+requires-python = ">=3.8,<3.14"
 license = { text = "Apache-2.0" }
 keywords = ["TPU", "gcloud", "tmux", "JAX"]
 authors = [
@@ -11,14 +11,12 @@ authors = [
 ]
 
 dependencies = [
-  "rich>=14.0.0",
+  "rich>=10.0.0",
 ]
 
 [project.scripts]
 # Preferred short command
 tpu = "irom_tpu_tools.cli:main"
-# Backwards-compatible name
-tpu-tools = "irom_tpu_tools.cli:main"
 
 [build-system]
 requires = ["hatchling"]

@@ -11,11 +11,13 @@ This package provides:
 from .config import TPUEnvConfig
 from .ssh import SSHOptions
 from .tpu import TPUManager
+from .tpu import resolve_tpu
 
 __all__ = [
     "SSHOptions",
     "TPUEnvConfig",
     "TPUManager",
+    "resolve_tpu",
 ]
 
 PROJECT_NAME = "irom-tpu-tools"
