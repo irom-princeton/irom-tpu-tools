@@ -29,6 +29,7 @@ _ALLOWED_NAMES = {
     "michael",
     "shresth",
     "lihan",
+    "catherine",
 }
 _TPU_NAME_RE = re.compile(r"^v\d+-\d+-\d+-(.+)$")
 
