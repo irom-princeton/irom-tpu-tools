@@ -234,7 +234,7 @@ class TPUManager:
             ssh=self.ssh,
         )
 
-    def ssh(self, version: Literal["v4", "v5", "v6"], *, worker: int = 0) -> int:
+    def shell(self, version: Literal["v4", "v5", "v6"], *, worker: int = 0) -> int:
         """Open an interactive SSH shell on a single worker (no tmux)."""
         zone = self._zone_for(version)
         args = [

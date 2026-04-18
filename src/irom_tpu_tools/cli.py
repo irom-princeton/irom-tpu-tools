@@ -31,22 +31,27 @@ _ALLOWED_NAMES = {
     "lihan",
     "catherine",
 }
-_TPU_NAME_RE = re.compile(r"^v\d+-\d+-\d+-(.+)$")
+_TPU_NAME_RE = re.compile(r"^(v\d+)-\d+-\d+-(.+)$")
 
 
 def _creator_from_name(name: str) -> str:
     m = _TPU_NAME_RE.match(name)
-    return m.group(1) if m else "-"
+    return m.group(2) if m else "-"
 
 
-def _validate_tpu_name(name: str) -> None:
+def _validate_tpu_name(name: str, version: str | None = None) -> None:
     m = _TPU_NAME_RE.match(name)
     if not m:
         raise SystemExit(
             f"Error: TPU name '{name}' does not match required format "
             "<tpu_type>-<num_tpus>-<index>-<your_name> (e.g. v6-64-01-lihan)"
         )
-    your_name = m.group(1)
+    name_version, your_name = m.group(1), m.group(2)
+    if version and name_version != version:
+        raise SystemExit(
+            f"Error: TPU name '{name}' starts with '{name_version}' but version '{version}' was specified. "
+            f"Name must start with '{version}-'."
+        )
     if your_name not in _ALLOWED_NAMES:
         raise SystemExit(
             f"Error: TPU name suffix '{your_name}' is not allowed. "
@@ -577,7 +582,7 @@ def _do_create(ns: argparse.Namespace, env: TPUEnvConfig, extra_args: list[str])
     tpu_name = ns.name or env.tpu_name
     if not tpu_name:
         raise SystemExit("Error: no TPU name provided (use --name or set TPU_NAME)")
-    _validate_tpu_name(tpu_name)
+    _validate_tpu_name(tpu_name, ns.version)
 
     command = " ".join(extra_args)  # empty string if no command provided
     topology = _map_v4_topology(ns.tpu_num) if ns.version == "v4" else None
@@ -775,7 +780,7 @@ def main(argv: list[str] | None = None) -> int:
     mgr = _resolve_mgr(env, name)
     v = mgr.version
     if ns.cmd == "ssh":
-        return mgr.ssh(v, worker=ns.worker)
+        return mgr.shell(v, worker=ns.worker)
     if ns.cmd == "tmux":
         cmd = " ".join(ns.rest) if getattr(ns, "rest", None) else ""
         ok = mgr.tmux(v, cmd=cmd, session=ns.session)
