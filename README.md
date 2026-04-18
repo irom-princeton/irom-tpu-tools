@@ -79,6 +79,7 @@ tpu create v6 --name my-tpu -n 8 --repo usrname/reponame  --branch main --setup-
 
 To access your instance after creation
 ```bash
+tpu ssh my-tpu                      # interactive SSH shell on worker 0 (no tmux)
 tpu attach my-tpu                   # attach to the training tmux session on worker 0 (Ctrl-B+D to exit)
 tpu tail my-tpu                     # read final lines of output
 tpu info my-tpu                     # get information about the tpu
@@ -118,6 +119,8 @@ The status/list tables include:
 
 | Command | Description |
 |---|---|
+| `tpu ssh NAME` | Open interactive SSH shell on worker 0 (no tmux) |
+| `tpu ssh NAME --worker 1` | Open interactive SSH shell on a specific worker |
 | `tpu attach NAME` | Attach to tmux session on worker 0 |
 | `tpu attach NAME --worker 1` | Attach on a specific worker |
 | `tpu tail NAME` | Tail last 50 lines of the latest tmux log on worker 0 |

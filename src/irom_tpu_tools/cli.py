@@ -105,6 +105,8 @@ def _print_commands() -> None:
         (
             "🔗 Connect",
             [
+                ("tpu ssh my-tpu", "Open interactive SSH shell on worker 0 (no tmux)"),
+                ("tpu ssh my-tpu --worker 1", "Open interactive SSH shell on a specific worker"),
                 ("tpu attach my-tpu", "Attach to tmux session on worker 0"),
                 ("tpu attach my-tpu --worker 1", "Attach to a specific worker"),
                 ("tpu tail my-tpu", "Tail the training log on the TPU"),
@@ -240,6 +242,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_tmux.add_argument(
         "rest", nargs=argparse.REMAINDER, help="Command to run in tmux session"
     )
+
+    p_ssh = sub.add_parser("ssh", help="Open interactive SSH shell on a worker (no tmux)")
+    _add_name_arg(p_ssh)
+    p_ssh.add_argument("--worker", type=int, default=0)
 
     p_attach = sub.add_parser("attach", help="Attach to tmux on a worker")
     _add_name_arg(p_attach)
@@ -768,6 +774,8 @@ def main(argv: list[str] | None = None) -> int:
 
     mgr = _resolve_mgr(env, name)
     v = mgr.version
+    if ns.cmd == "ssh":
+        return mgr.ssh(v, worker=ns.worker)
     if ns.cmd == "tmux":
         cmd = " ".join(ns.rest) if getattr(ns, "rest", None) else ""
         ok = mgr.tmux(v, cmd=cmd, session=ns.session)

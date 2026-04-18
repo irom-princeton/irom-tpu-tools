@@ -234,6 +234,23 @@ class TPUManager:
             ssh=self.ssh,
         )
 
+    def ssh(self, version: Literal["v4", "v5", "v6"], *, worker: int = 0) -> int:
+        """Open an interactive SSH shell on a single worker (no tmux)."""
+        zone = self._zone_for(version)
+        args = [
+            "gcloud", "alpha", "compute", "tpus", "tpu-vm", "ssh",
+            self.tpu_name,
+            "--project", self.env.tpu_project,
+            "--zone", zone,
+            "--worker", str(worker),
+            "--",
+            "-o", "StrictHostKeyChecking=accept-new",
+            "-o", "UserKnownHostsFile=/dev/null",
+        ]
+        if self.ssh.forward_agent and os.environ.get("SSH_AUTH_SOCK"):
+            args.append("-A")
+        return run_streaming(args)
+
     def attach(self, version: Literal["v4", "v5", "v6"], *, session: str = "tpu", worker: int = 0) -> int:
         # Use exec with `tmux new -As` to attach-or-create without running extra commands afterward
         return gcloud_tpu_ssh_stream(
