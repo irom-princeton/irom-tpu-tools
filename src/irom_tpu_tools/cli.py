@@ -7,10 +7,29 @@ import subprocess
 import sys
 
 from .config import TPUEnvConfig
-from .jobs import JobConfig, is_watcher_running, last_preempted, log_path, preemption_count, remove_job, running_since, stop_watcher
+from .jobs import (
+    JobConfig,
+    is_watcher_running,
+    last_preempted,
+    log_path,
+    preemption_count,
+    remove_job,
+    running_since,
+    stop_watcher,
+)
 from .tpu import TPUManager
 
-_ALLOWED_NAMES = {"tenny", "asher", "yanbo", "ola", "may", "apurva", "michael", "shresth"}
+_ALLOWED_NAMES = {
+    "tenny",
+    "asher",
+    "yanbo",
+    "ola",
+    "may",
+    "apurva",
+    "michael",
+    "shresth",
+    "lihan",
+}
 _TPU_NAME_RE = re.compile(r"^v\d+-\d+-\d+-(.+)$")
 
 
@@ -36,7 +55,9 @@ def _validate_tpu_name(name: str) -> None:
 
 def _add_name_arg(p: argparse.ArgumentParser) -> None:
     """Add optional TPU name positional; falls back to TPU_NAME env."""
-    p.add_argument("name", nargs="?", default=None, help="TPU name (default: $TPU_NAME env var)")
+    p.add_argument(
+        "name", nargs="?", default=None, help="TPU name (default: $TPU_NAME env var)"
+    )
 
 
 def _print_commands() -> None:
@@ -54,9 +75,15 @@ def _print_commands() -> None:
         (
             "🚀 Lifecycle",
             [
-                ("tpu create v4 -n 8 --name my-tpu -- python train.py", "Create TPU, setup, launch training, start background watcher"),
+                (
+                    "tpu create v4 -n 8 --name my-tpu -- python train.py",
+                    "Create TPU, setup, launch training, start background watcher",
+                ),
                 ("tpu delete my-tpu", "Delete TPU and stop its background watcher"),
-                ("tpu nuke my-tpu", "Kill tmux + JAX processes + clean tmp (full reset) (preserve allocation, can restart later)"),
+                (
+                    "tpu nuke my-tpu",
+                    "Kill tmux + JAX processes + clean tmp (full reset) (preserve allocation, can restart later)",
+                ),
             ],
         ),
         (
@@ -66,7 +93,10 @@ def _print_commands() -> None:
                 ("tpu list v4", "List TPUs in a specific zone"),
                 ("tpu status", "Show status of all managed jobs"),
                 ("tpu status my-tpu", "Show status of a specific job"),
-                ("tpu info my-tpu", "Show full job details (repo, setup, command, created, preemptions)"),
+                (
+                    "tpu info my-tpu",
+                    "Show full job details (repo, setup, command, created, preemptions)",
+                ),
                 ("tpu logs my-tpu", "View background watcher logs"),
                 ("tpu logs my-tpu -f", "Follow watcher logs in real time"),
             ],
@@ -84,7 +114,10 @@ def _print_commands() -> None:
             "🔧 Advanced",
             [
                 ("tpu v4 -- ls -la", "Run raw SSH command on all v4 workers"),
-                ("tpu v4 --worker 0 -- nvidia-smi", "Run raw command on a specific worker"),
+                (
+                    "tpu v4 --worker 0 -- nvidia-smi",
+                    "Run raw command on a specific worker",
+                ),
                 ("tpu v4 setup", "Re-run the setup step on v4 workers"),
             ],
         ),
@@ -104,64 +137,119 @@ def _print_commands() -> None:
         c.print()
 
     c.print(Text("  💡 Tip: ", style="bold bright_magenta"), end="")
-    c.print(Text("Most commands auto-detect the TPU zone — just pass the name!", style="bright_magenta"))
+    c.print(
+        Text(
+            "Most commands auto-detect the TPU zone — just pass the name!",
+            style="bright_magenta",
+        )
+    )
     c.print()
 
 
 def build_parser() -> argparse.ArgumentParser:
-    prog_name = (sys.argv[0].rsplit("/", 1)[-1] or "tpu") if getattr(sys, "argv", None) else "tpu"
-    ap = argparse.ArgumentParser(prog=prog_name, description="Unified TPU utilities for v4/v5/v6")
-    ap.add_argument("--commands", action="store_true", help="Show example commands with explanations")
+    prog_name = (
+        (sys.argv[0].rsplit("/", 1)[-1] or "tpu")
+        if getattr(sys, "argv", None)
+        else "tpu"
+    )
+    ap = argparse.ArgumentParser(
+        prog=prog_name, description="Unified TPU utilities for v4/v5/v6"
+    )
+    ap.add_argument(
+        "--commands",
+        action="store_true",
+        help="Show example commands with explanations",
+    )
     sub = ap.add_subparsers(dest="cmd", required=False)
 
     # --- create: provision + setup + launch + background watcher ---
-    p_create = sub.add_parser("create", help="Create TPU, run setup, launch training, start background watcher")
+    p_create = sub.add_parser(
+        "create",
+        help="Create TPU, run setup, launch training, start background watcher",
+    )
     p_create.add_argument("version", choices=["v4", "v5", "v6"], help="TPU version")
-    p_create.add_argument("--name", default=None, help="TPU name (default: $TPU_NAME env var)")
+    p_create.add_argument(
+        "--name", default=None, help="TPU name (default: $TPU_NAME env var)"
+    )
     p_create.add_argument("--tpu-num", "-n", type=int, default=8, help="TPU chips")
-    p_create.add_argument("--repo", default=None, help="GitHub repo 'owner/name' to clone (omit for bare TPU)")
-    p_create.add_argument("--branch", "-b", default="main", help="Git branch to checkout (ignored without --repo)")
-    p_create.add_argument("--setup-cmd", "-s", default="uv sync", help="Setup command run inside the cloned repo (ignored without --repo)")
-    p_create.add_argument("--force", "-f", action="store_true", help="If TPU is already READY, re-run setup and command without prompting")
+    p_create.add_argument(
+        "--repo",
+        default=None,
+        help="GitHub repo 'owner/name' to clone (omit for bare TPU)",
+    )
+    p_create.add_argument(
+        "--branch",
+        "-b",
+        default="main",
+        help="Git branch to checkout (ignored without --repo)",
+    )
+    p_create.add_argument(
+        "--setup-cmd",
+        "-s",
+        default="uv sync",
+        help="Setup command run inside the cloned repo (ignored without --repo)",
+    )
+    p_create.add_argument(
+        "--force",
+        "-f",
+        action="store_true",
+        help="If TPU is already READY, re-run setup and command without prompting",
+    )
 
     # --- list (optional version filter, shows watcher status) ---
     p_list = sub.add_parser("list", help="List TPUs with watcher status")
-    p_list.add_argument("version", nargs="?", choices=["v4", "v5", "v6"], default=None, help="Filter by version (omit for all)")
+    p_list.add_argument(
+        "version",
+        nargs="?",
+        choices=["v4", "v5", "v6"],
+        default=None,
+        help="Filter by version (omit for all)",
+    )
 
     # --- status: show all managed jobs ---
     p_status = sub.add_parser("status", help="Show status of managed TPU jobs")
-    p_status.add_argument("name", nargs="?", default=None, help="Specific job name (omit for all)")
+    p_status.add_argument(
+        "name", nargs="?", default=None, help="Specific job name (omit for all)"
+    )
 
     # --- info: show full details of a single managed job ---
-    p_info = sub.add_parser("info", help="Show full details of a managed TPU job (repo, setup, command, created, preemptions)")
-    p_info.add_argument("name", nargs="?", default=None, help="Job name (default: $TPU_NAME env var)")
+    p_info = sub.add_parser(
+        "info",
+        help="Show full details of a managed TPU job (repo, setup, command, created, preemptions)",
+    )
+    p_info.add_argument(
+        "name", nargs="?", default=None, help="Job name (default: $TPU_NAME env var)"
+    )
 
     # --- logs: tail watcher log ---
     p_logs = sub.add_parser("logs", help="Tail the watcher log for a job")
     _add_name_arg(p_logs)
-    p_logs.add_argument("--lines", "-n", type=int, default=50, help="Number of lines to show")
+    p_logs.add_argument(
+        "--lines", "-n", type=int, default=50, help="Number of lines to show"
+    )
     p_logs.add_argument("--follow", "-f", action="store_true", help="Follow log output")
 
     # --- per-TPU commands: take optional name, auto-detect version/zone ---
     p_delete = sub.add_parser("delete", help="Delete a TPU (also stops watcher)")
     _add_name_arg(p_delete)
 
-
     p_tmux = sub.add_parser("tmux", help="Run a tmux command on all workers")
     _add_name_arg(p_tmux)
     p_tmux.add_argument("--session", default="tpu")
-    p_tmux.add_argument("rest", nargs=argparse.REMAINDER, help="Command to run in tmux session")
+    p_tmux.add_argument(
+        "rest", nargs=argparse.REMAINDER, help="Command to run in tmux session"
+    )
 
     p_attach = sub.add_parser("attach", help="Attach to tmux on a worker")
     _add_name_arg(p_attach)
     p_attach.add_argument("--session", default="tpu")
     p_attach.add_argument("--worker", type=int, default=0)
 
-
-    p_tail = sub.add_parser("tail", help="Show last 50 lines of latest tmux log on a worker")
+    p_tail = sub.add_parser(
+        "tail", help="Show last 50 lines of latest tmux log on a worker"
+    )
     _add_name_arg(p_tail)
     p_tail.add_argument("--worker", type=int, default=0)
-
 
     p_clean_logs = sub.add_parser("clean", help="Truncate system logs on all workers")
     _add_name_arg(p_clean_logs)
@@ -171,13 +259,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     # --- raw SSH commands (version is the subcommand itself) ---
     p_v4 = sub.add_parser("v4", help="Run raw command on v4 workers (no tmux)")
-    p_v4.add_argument("--worker", type=int, default=None, help="Worker index (default: all)")
+    p_v4.add_argument(
+        "--worker", type=int, default=None, help="Worker index (default: all)"
+    )
     p_v4.add_argument("rest", nargs=argparse.REMAINDER, help="Command to run remotely")
     p_v5 = sub.add_parser("v5", help="Run raw command on v5 workers (no tmux)")
-    p_v5.add_argument("--worker", type=int, default=None, help="Worker index (default: all)")
+    p_v5.add_argument(
+        "--worker", type=int, default=None, help="Worker index (default: all)"
+    )
     p_v5.add_argument("rest", nargs=argparse.REMAINDER, help="Command to run remotely")
     p_v6 = sub.add_parser("v6", help="Run raw command on v6 workers (no tmux)")
-    p_v6.add_argument("--worker", type=int, default=None, help="Worker index (default: all)")
+    p_v6.add_argument(
+        "--worker", type=int, default=None, help="Worker index (default: all)"
+    )
     p_v6.add_argument("rest", nargs=argparse.REMAINDER, help="Command to run remotely")
 
     return ap
@@ -205,11 +299,19 @@ def _list_tpus_in_zone(project: str, zone: str) -> list[dict]:
     """Query gcloud for TPUs in a zone, return parsed JSON list."""
     proc = subprocess.run(
         [
-            "gcloud", "compute", "tpus", "tpu-vm", "list",
-            "--zone", zone, "--project", project,
+            "gcloud",
+            "compute",
+            "tpus",
+            "tpu-vm",
+            "list",
+            "--zone",
+            zone,
+            "--project",
+            project,
             "--format=json(name,state,acceleratorType)",
         ],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     if proc.returncode != 0 or not proc.stdout.strip():
         return []
@@ -234,8 +336,26 @@ def _print_tpu_table(rows: list[dict]) -> None:
     for r in rows:
         r["state"] = _STATE_DISPLAY.get(r.get("state", ""), r.get("state", ""))
     # Column widths
-    headers = ["NAME", "CREATOR", "STATE", "ACCELERATOR", "WATCHER", "RUNNING SINCE", "#PREEMPTIONS", "LAST PREEMPTED"]
-    keys = ["name", "creator", "state", "accel", "watcher", "running", "pcount", "preempted"]
+    headers = [
+        "NAME",
+        "CREATOR",
+        "STATE",
+        "ACCELERATOR",
+        "WATCHER",
+        "RUNNING SINCE",
+        "#PREEMPTIONS",
+        "LAST PREEMPTED",
+    ]
+    keys = [
+        "name",
+        "creator",
+        "state",
+        "accel",
+        "watcher",
+        "running",
+        "pcount",
+        "preempted",
+    ]
     widths = [len(h) for h in headers]
     for r in rows:
         for i, k in enumerate(keys):
@@ -276,7 +396,18 @@ def _do_list(env: TPUEnvConfig, version: str | None) -> int:
             running = running_since(name) or "-"
             pcount = str(preemption_count(name))
             preempted = last_preempted(name) or "-"
-            rows.append({"name": name, "creator": _creator_from_name(name), "state": state, "accel": accel, "watcher": watcher, "running": running, "pcount": pcount, "preempted": preempted})
+            rows.append(
+                {
+                    "name": name,
+                    "creator": _creator_from_name(name),
+                    "state": state,
+                    "accel": accel,
+                    "watcher": watcher,
+                    "running": running,
+                    "pcount": pcount,
+                    "preempted": preempted,
+                }
+            )
         _print_tpu_table(rows)
         print()
     return 0
@@ -314,15 +445,17 @@ def _do_status(env: TPUEnvConfig, name: str | None) -> int:
         running = running_since(n) or "-"
         pcount = str(preemption_count(n))
         preempted = last_preempted(n) or "-"
-        rows.append({
-            "name": n,
-            "state": state,
-            "accel": f"{job.version}-{job.tpu_num}",
-            "watcher": watcher,
-            "running": running,
-            "pcount": pcount,
-            "preempted": preempted,
-        })
+        rows.append(
+            {
+                "name": n,
+                "state": state,
+                "accel": f"{job.version}-{job.tpu_num}",
+                "watcher": watcher,
+                "running": running,
+                "pcount": pcount,
+                "preempted": preempted,
+            }
+        )
 
     _print_tpu_table(rows)
     return 0
@@ -331,15 +464,30 @@ def _do_status(env: TPUEnvConfig, name: str | None) -> int:
 # ---- info ----
 
 
-def _gcloud_describe_json(project: str, zone: str, name: str, timeout_s: int = 20) -> dict:
+def _gcloud_describe_json(
+    project: str, zone: str, name: str, timeout_s: int = 20
+) -> dict:
     """Query full TPU details via gcloud describe --format=json. Returns {} on error."""
     try:
         proc = subprocess.run(
             [
-                "gcloud", "alpha", "compute", "tpus", "tpu-vm", "describe", name,
-                "--zone", zone, "--project", project, "--format", "json",
+                "gcloud",
+                "alpha",
+                "compute",
+                "tpus",
+                "tpu-vm",
+                "describe",
+                name,
+                "--zone",
+                zone,
+                "--project",
+                project,
+                "--format",
+                "json",
             ],
-            capture_output=True, text=True, timeout=timeout_s,
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
         )
     except (subprocess.TimeoutExpired, OSError):
         return {}
@@ -371,7 +519,9 @@ def _do_info(env: TPUEnvConfig, name: str | None) -> int:
     state = details.get("state", "UNKNOWN")
     health = details.get("health", "-")
     created = details.get("createTime", "-")
-    accel = (details.get("acceleratorType") or f"{job.version}-{job.tpu_num}").rsplit("/", 1)[-1]
+    accel = (details.get("acceleratorType") or f"{job.version}-{job.tpu_num}").rsplit(
+        "/", 1
+    )[-1]
 
     watcher = "running" if is_watcher_running(tpu_name) else "stopped"
     running = running_since(tpu_name) or "-"
@@ -384,20 +534,20 @@ def _do_info(env: TPUEnvConfig, name: str | None) -> int:
     c.print(Text("  ─" * 28, style="dim"))
 
     rows = [
-        ("Accelerator",    accel),
-        ("Creator",        _creator_from_name(tpu_name)),
-        ("Zone",           zone),
-        ("State",          state),
-        ("Health",         health),
-        ("Created",        created),
-        ("Watcher",        watcher),
-        ("Running since",  running),
-        ("Preemptions",    str(pcount)),
+        ("Accelerator", accel),
+        ("Creator", _creator_from_name(tpu_name)),
+        ("Zone", zone),
+        ("State", state),
+        ("Health", health),
+        ("Created", created),
+        ("Watcher", watcher),
+        ("Running since", running),
+        ("Preemptions", str(pcount)),
         ("Last preempted", preempted),
-        ("Repo",           job.repo or "(bare — no clone)"),
-        ("Branch",         job.branch if job.repo else "-"),
-        ("Setup",          job.setup_cmd if job.repo else "-"),
-        ("Command",        job.command or "-"),
+        ("Repo", job.repo or "(bare — no clone)"),
+        ("Branch", job.branch if job.repo else "-"),
+        ("Setup", job.setup_cmd if job.repo else "-"),
+        ("Command", job.command or "-"),
     ]
     label_w = max(len(k) for k, _ in rows)
     for k, v in rows:
@@ -445,12 +595,18 @@ def _do_create(ns: argparse.Namespace, env: TPUEnvConfig, extra_args: list[str])
     if current_state == "READY":
         try:
             is_busy = pinned_mgr.check_activity(ns.version)
-            activity = "busy (JAX/Python processes detected)" if is_busy else "idle (no JAX processes detected)"
+            activity = (
+                "busy (JAX/Python processes detected)"
+                if is_busy
+                else "idle (no JAX processes detected)"
+            )
         except Exception:
             activity = "activity unknown"
 
         print(f"TPU '{tpu_name}' is already READY — {activity}.")
-        print("  The TPU will NOT be re-created; setup and command will be re-run on the existing TPU.")
+        print(
+            "  The TPU will NOT be re-created; setup and command will be re-run on the existing TPU."
+        )
         if force_run:
             print("  --force specified: skipping confirmation.")
         else:
@@ -482,11 +638,12 @@ def _do_create(ns: argparse.Namespace, env: TPUEnvConfig, extra_args: list[str])
     print(f"  Watcher PID: {pid}")
     print(f"  Log file:    ~/.tpu-jobs/{tpu_name}/watch.log")
     print()
-    print(f"  tpu status             Check job status")
+    print("  tpu status             Check job status")
     print(f"  tpu logs {tpu_name:<14s} View watcher log")
     print(f"  tpu logs {tpu_name:<14s} -f  Follow log in real time")
     print(f"  tpu delete {tpu_name:<12s} Stop and delete")
     return 0
+
 
 # ---- logs ----
 
@@ -500,6 +657,7 @@ def _do_logs(ns: argparse.Namespace) -> int:
         print(f"No watcher log found for '{name}' (expected at {lp})")
         return 1
     import subprocess
+
     args = ["tail", f"-n{ns.lines}"]
     if ns.follow:
         args.append("-f")
@@ -539,7 +697,15 @@ def main(argv: list[str] | None = None) -> int:
     if ns.cmd == "watch":
         from .watch import main as _watch_main
 
-        return _watch_main([ns.version, *((ns.force and ["--force"]) or []), "-n", str(ns.tpu_num), *unknown])
+        return _watch_main(
+            [
+                ns.version,
+                *((ns.force and ["--force"]) or []),
+                "-n",
+                str(ns.tpu_num),
+                *unknown,
+            ]
+        )
 
     # --- list ---
     if ns.cmd == "list":
@@ -594,7 +760,9 @@ def main(argv: list[str] | None = None) -> int:
             ok = mgr.delete(mgr.version)
             return 0 if ok else 1
         except SystemExit:
-            print(f"TPU '{tpu_name}' not found (already deleted or never created). Job state cleaned up.")
+            print(
+                f"TPU '{tpu_name}' not found (already deleted or never created). Job state cleaned up."
+            )
             return 0
 
     mgr = _resolve_mgr(env, name)
