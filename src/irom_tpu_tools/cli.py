@@ -14,6 +14,11 @@ _ALLOWED_NAMES = {"tenny", "asher", "yanbo", "ola", "may", "apurva", "michael", 
 _TPU_NAME_RE = re.compile(r"^v\d+-\d+-\d+-(.+)$")
 
 
+def _creator_from_name(name: str) -> str:
+    m = _TPU_NAME_RE.match(name)
+    return m.group(1) if m else "-"
+
+
 def _validate_tpu_name(name: str) -> None:
     m = _TPU_NAME_RE.match(name)
     if not m:
@@ -229,8 +234,8 @@ def _print_tpu_table(rows: list[dict]) -> None:
     for r in rows:
         r["state"] = _STATE_DISPLAY.get(r.get("state", ""), r.get("state", ""))
     # Column widths
-    headers = ["NAME", "STATE", "ACCELERATOR", "WATCHER", "RUNNING SINCE", "#PREEMPTIONS", "LAST PREEMPTED"]
-    keys = ["name", "state", "accel", "watcher", "running", "pcount", "preempted"]
+    headers = ["NAME", "CREATOR", "STATE", "ACCELERATOR", "WATCHER", "RUNNING SINCE", "#PREEMPTIONS", "LAST PREEMPTED"]
+    keys = ["name", "creator", "state", "accel", "watcher", "running", "pcount", "preempted"]
     widths = [len(h) for h in headers]
     for r in rows:
         for i, k in enumerate(keys):
@@ -271,7 +276,7 @@ def _do_list(env: TPUEnvConfig, version: str | None) -> int:
             running = running_since(name) or "-"
             pcount = str(preemption_count(name))
             preempted = last_preempted(name) or "-"
-            rows.append({"name": name, "state": state, "accel": accel, "watcher": watcher, "running": running, "pcount": pcount, "preempted": preempted})
+            rows.append({"name": name, "creator": _creator_from_name(name), "state": state, "accel": accel, "watcher": watcher, "running": running, "pcount": pcount, "preempted": preempted})
         _print_tpu_table(rows)
         print()
     return 0
@@ -380,6 +385,7 @@ def _do_info(env: TPUEnvConfig, name: str | None) -> int:
 
     rows = [
         ("Accelerator",    accel),
+        ("Creator",        _creator_from_name(tpu_name)),
         ("Zone",           zone),
         ("State",          state),
         ("Health",         health),
