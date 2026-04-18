@@ -2,12 +2,31 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 
 from .config import TPUEnvConfig
 from .jobs import JobConfig, is_watcher_running, last_preempted, log_path, preemption_count, remove_job, running_since, stop_watcher
 from .tpu import TPUManager
+
+_ALLOWED_NAMES = {"tenny", "asher", "yanbo", "ola", "may", "apurva", "michael", "shresth"}
+_TPU_NAME_RE = re.compile(r"^v\d+-\d+-\d+-(.+)$")
+
+
+def _validate_tpu_name(name: str) -> None:
+    m = _TPU_NAME_RE.match(name)
+    if not m:
+        raise SystemExit(
+            f"Error: TPU name '{name}' does not match required format "
+            "<tpu_type>-<num_tpus>-<index>-<your_name> (e.g. v6-64-01-lihan)"
+        )
+    your_name = m.group(1)
+    if your_name not in _ALLOWED_NAMES:
+        raise SystemExit(
+            f"Error: TPU name suffix '{your_name}' is not allowed. "
+            f"Must be one of: {', '.join(sorted(_ALLOWED_NAMES))}"
+        )
 
 
 def _add_name_arg(p: argparse.ArgumentParser) -> None:
@@ -395,6 +414,7 @@ def _do_create(ns: argparse.Namespace, env: TPUEnvConfig, extra_args: list[str])
     tpu_name = ns.name or env.tpu_name
     if not tpu_name:
         raise SystemExit("Error: no TPU name provided (use --name or set TPU_NAME)")
+    _validate_tpu_name(tpu_name)
 
     command = " ".join(extra_args)  # empty string if no command provided
     topology = _map_v4_topology(ns.tpu_num) if ns.version == "v4" else None
