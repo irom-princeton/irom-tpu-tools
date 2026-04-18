@@ -86,7 +86,7 @@ tpu logs my-tpu                     # show last 50 lines of the watcher log
 ```
 
 ### Deleting a TPU instance
-
+```
 # stop watcher + delete TPU (releases allocation)
 tpu delete my-tpu
 ```
