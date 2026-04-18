@@ -17,8 +17,6 @@ dependencies = [
 [project.scripts]
 # Preferred short command
 tpu = "irom_tpu_tools.cli:main"
-# Backwards-compatible name
-tpu-tools = "irom_tpu_tools.cli:main"
 
 [build-system]
 requires = ["hatchling"]

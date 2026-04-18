@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import argparse
 import base64
-from dataclasses import dataclass
 from datetime import datetime
 import os
 import signal
@@ -24,16 +22,6 @@ def _map_v4_topology(tpu_num: int) -> str:
     if tpu_num not in mapping:
         raise SystemExit(f"Error: unsupported TPU_NUM '{tpu_num}' (allowed: 4, 8, 16, 32)")
     return mapping[tpu_num]
-
-
-@dataclass
-class WatchConfig:
-    version: str  # v4/v5/v6
-    force_run: bool
-    tpu_num: int
-    branch: str
-    extra_args: list[str]
-    setup_cmd: str = "uv sync"  # commands to run after clone, e.g. "uv sync && uv pip install -e ."
 
 
 def _split_repo(repo: str) -> tuple[str, str]:
@@ -161,32 +149,38 @@ def _do_setup_and_training(
     return True
 
 
-def create_and_launch(job: JobConfig, env: TPUEnvConfig) -> bool:
-    """Create a TPU, run setup, and launch training. Returns True on success.
+def _wait_for_ready(mgr: TPUManager, version: str, *, poll_secs: int = 15) -> bool:
+    """Poll until TPU is READY or a terminal/error state. Returns True only on READY.
 
-    Used by `tpu create` for the initial provisioning.
+    Runs indefinitely — the caller's signal handler (SystemExit) will interrupt
+    the sleep if the watcher is stopped externally.
     """
-    mgr = TPUManager(env).for_tpu(job.name, job.version, env.zones[job.version])
+    while True:
+        try:
+            state = mgr.describe(version)
+        except Exception as exc:
+            print(f"{_ts()} - Describe error while waiting for READY: {exc}")
+            sys.stdout.flush()
+            sleep(poll_secs)
+            continue
+        print(f"{_ts()} - TPU state: {state}")
+        sys.stdout.flush()
+        if state == "READY":
+            return True
+        if state in {"PREEMPTED", "STOPPED", "NOT_FOUND", "ERROR", "PERMISSION_DENIED"}:
+            print(f"{_ts()} - Unexpected state '{state}' while waiting for READY.")
+            sys.stdout.flush()
+            return False
+        sleep(poll_secs)
 
-    print(f"{_ts()} - Creating TPU '{job.name}'...")
-    topo = job.topology or (_map_v4_topology(job.tpu_num) if job.version == "v4" else None)
-    if not mgr.create(job.version, tpu_num=job.tpu_num, topology=topo):
-        print(f"{_ts()} - Create failed/timed out.")
-        return False
 
-    print(f"{_ts()} - Waiting for TPU to be READY...")
-    sleep(10)
-
-    return _do_setup_and_training(
-        mgr, job.version, env,
-        command=job.command, branch=job.branch, setup_cmd=job.setup_cmd, repo=job.repo,
-    )
-
-
-def watch_loop(job: JobConfig, env: TPUEnvConfig) -> None:
+def watch_loop(job: JobConfig, env: TPUEnvConfig, *, force_run: bool = False) -> None:
     """Background watcher loop: monitor TPU state and recover from preemptions.
 
     This runs as a daemon — it never returns unless signaled.
+    If force_run is True, run setup+training on the first READY encounter even
+    if the TPU is already up. Otherwise, assume training is already running and
+    only act on preemptions/stops.
     """
     mgr = TPUManager(env).for_tpu(job.name, job.version, env.zones[job.version])
 
@@ -198,6 +192,15 @@ def watch_loop(job: JobConfig, env: TPUEnvConfig) -> None:
     def handle_sig(signum, frame):
         print(f"{_ts()} - Watcher caught signal {signum}, exiting.")
         sys.stdout.flush()
+        # Ignore further signals on self before broadcasting to the process group,
+        # so we don't re-enter this handler from the killpg below.
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        try:
+            # Kill all child processes (e.g. gcloud create/delete still in flight).
+            os.killpg(os.getpgid(0), signal.SIGTERM)
+        except OSError:
+            pass
         raise SystemExit(0)
 
     signal.signal(signal.SIGINT, handle_sig)
@@ -205,7 +208,9 @@ def watch_loop(job: JobConfig, env: TPUEnvConfig) -> None:
 
     from .jobs import record_preemption, record_running
 
-    recorded_ready = False
+    # training_launched=False means we need to (re-)run setup+training on next READY.
+    # Start False only when --force is requested; otherwise assume training is running.
+    training_launched = not force_run
 
     while True:
         try:
@@ -220,14 +225,25 @@ def watch_loop(job: JobConfig, env: TPUEnvConfig) -> None:
         sys.stdout.flush()
 
         if state == "READY":
-            if not recorded_ready:
-                record_running(job.name)
-                recorded_ready = True
+            if not training_launched:
+                print(f"{_ts()} - TPU READY; running setup and launching command...")
+                sys.stdout.flush()
+                ok = _do_setup_and_training(
+                    mgr, job.version, env,
+                    command=job.command, branch=job.branch, setup_cmd=job.setup_cmd, repo=job.repo,
+                )
+                if ok:
+                    training_launched = True
+                    record_running(job.name)
+                    print(f"{_ts()} - Setup and launch complete.")
+                else:
+                    print(f"{_ts()} - Setup/launch failed, will retry next cycle.")
+                sys.stdout.flush()
             sleep(mgr.sleep_secs)
             continue
 
         if state in {"PREEMPTED", "STOPPED", "NOT_FOUND"}:
-            recorded_ready = False
+            training_launched = False
             if state == "PREEMPTED":
                 record_preemption(job.name)
                 print(f"{_ts()} - Preemption recorded.")
@@ -247,15 +263,17 @@ def watch_loop(job: JobConfig, env: TPUEnvConfig) -> None:
                 continue
 
             print(f"{_ts()} - Waiting for TPU to be READY...")
-            sleep(10)
+            if not _wait_for_ready(mgr, job.version):
+                sleep(mgr.sleep_secs)
+                continue
 
             ok = _do_setup_and_training(
                 mgr, job.version, env,
                 command=job.command, branch=job.branch, setup_cmd=job.setup_cmd, repo=job.repo,
             )
             if ok:
+                training_launched = True
                 record_running(job.name)
-                recorded_ready = True
                 print(f"{_ts()} - TPU ready, training launched.")
             else:
                 print(f"{_ts()} - Setup/launch failed, will retry next cycle.")
@@ -265,10 +283,14 @@ def watch_loop(job: JobConfig, env: TPUEnvConfig) -> None:
             print(f"{_ts()} - PERMISSION_DENIED. Check IAM/API enablement.")
             sys.stdout.flush()
 
+        else:
+            print(f"{_ts()} - TPU in state '{state}' (not actionable now).")
+            sys.stdout.flush()
+
         sleep(mgr.sleep_secs)
 
 
-def spawn_watcher(job: JobConfig, env: TPUEnvConfig) -> int:
+def spawn_watcher(job: JobConfig, env: TPUEnvConfig, *, force_run: bool = False) -> int:
     """Fork a background watcher daemon. Returns the daemon PID."""
     from .jobs import log_path, save_pid
 
@@ -295,130 +317,10 @@ def spawn_watcher(job: JobConfig, env: TPUEnvConfig) -> int:
     os.close(devnull)
 
     try:
-        watch_loop(job, env)
+        watch_loop(job, env, force_run=force_run)
     except SystemExit:
         pass
     except Exception as exc:
         print(f"{_ts()} - Watcher crashed: {exc}")
     finally:
         os._exit(0)
-
-
-# ---------- legacy watch (kept for `tpu watch` backwards compat) ----------
-
-
-def watch_and_run(cfg: WatchConfig, env: TPUEnvConfig) -> None:
-    mgr = TPUManager(env)
-
-    print("Starting TPU auto-launcher with:")
-    print(f"  TPU Name: {env.tpu_name}")
-    zone = getattr(env, f"tpu_zone_{cfg.version}")
-    print(f"  Zone: {zone}")
-    print(f"  Project: {env.tpu_project}")
-    effective_sa = env.service_account_for_zone(zone)
-    print(f"  Service Account: {effective_sa}")
-    print(f"  Repo Name: {env.gh_repo_name}")
-    bucket = getattr(env, f"tpu_bucket_{cfg.version}")
-    print(f"  Bucket: {bucket}")
-    print(f"  TPU Num: {cfg.tpu_num}")
-    if cfg.version == "v4":
-        print(f"  Topology: {_map_v4_topology(cfg.tpu_num)}")
-    print(f"  Branch: {cfg.branch}")
-    print(f"  Setup cmd: {cfg.setup_cmd}")
-    print(f"  Force run: {cfg.force_run}")
-    if cfg.extra_args:
-        print(f"  Command: {' '.join(cfg.extra_args)}")
-    print()
-
-    def handle_sig(signum, frame):
-        print(f"{_ts()} - Caught signal, exiting.")
-        raise SystemExit(0)
-
-    signal.signal(signal.SIGINT, handle_sig)
-    signal.signal(signal.SIGTERM, handle_sig)
-
-    while True:
-        print(f"{_ts()} - Checking TPU state...")
-        try:
-            state = mgr.describe(cfg.version)
-        except Exception as exc:
-            print(str(exc))
-            sleep(mgr.sleep_secs)
-            continue
-
-        print(f"{_ts()} - TPU {env.tpu_name} state: {state}")
-
-        run_setup_and_training = False
-
-        if state in {"NOT_FOUND", "PREEMPTED", "STOPPED"}:
-            print(f"{_ts()} - Need to (re)create TPU...")
-            if state != "NOT_FOUND" and not mgr.delete(cfg.version):
-                print(f"{_ts()} - Delete failed/timed out.")
-                sleep(mgr.sleep_secs)
-                continue
-            print(f"{_ts()} - Creating new TPU...")
-            topo = _map_v4_topology(cfg.tpu_num) if cfg.version == "v4" else None
-            if not mgr.create(cfg.version, tpu_num=cfg.tpu_num, topology=topo):
-                print(f"{_ts()} - Create failed/timed out.")
-                sleep(mgr.sleep_secs)
-                continue
-            print(f"{_ts()} - Waiting for TPU to be READY...")
-            sleep(10)
-            run_setup_and_training = True
-        elif state == "PERMISSION_DENIED":
-            print(f"{_ts()} - PERMISSION_DENIED from describe. Check IAM/API enablement.")
-            sleep(mgr.sleep_secs)
-            continue
-        elif state == "READY":
-            run_setup_and_training = cfg.force_run
-        else:
-            print(f"{_ts()} - TPU in state: {state} (not actionable now).")
-            sleep(mgr.sleep_secs)
-            continue
-
-        if run_setup_and_training:
-            if not cfg.extra_args:
-                print(f"{_ts()} - No command provided. Pass the command to run after the branch name.")
-                sleep(mgr.sleep_secs)
-                continue
-            legacy_repo = f"{env.gh_owner}/{env.gh_repo_name}" if (env.gh_owner and env.gh_repo_name) else ""
-            ok = _do_setup_and_training(
-                mgr, cfg.version, env,
-                command=" ".join(cfg.extra_args), branch=cfg.branch,
-                setup_cmd=cfg.setup_cmd, repo=legacy_repo,
-            )
-            if not ok:
-                sleep(mgr.sleep_secs)
-                continue
-            if cfg.force_run:
-                print(f"{_ts()} - Force run requested; exiting.")
-                return
-
-        sleep(mgr.sleep_secs)
-
-
-def build_arg_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="tpu-tools watch")
-    p.add_argument("version", choices=["v4", "v5", "v6"], help="TPU version to target")
-    p.add_argument("--force", "-f", action="store_true", help="Force setup and training even if READY")
-    p.add_argument("--tpu-num", "-n", type=int, default=8, help="TPU chips (v4: 4/8/16/32; v5:16/32/64; v6:any)")
-    p.add_argument("--setup-cmd", "-s", default="uv sync", help='Commands to run after clone (e.g. "uv sync && uv pip install -e .")')
-    return p
-
-
-def main(argv: list[str] | None = None) -> int:
-    argv = list(sys.argv[1:] if argv is None else argv)
-    ap = build_arg_parser()
-    ns, extra = ap.parse_known_args(argv)
-    # Normalize extras: drop a leading '--' sentinel if present
-    if extra and extra[0] == "--":
-        extra = extra[1:]
-    # Extract branch name if present (first non-flag argument in extra)
-    branch = "main"
-    if extra and not extra[0].startswith("-"):
-        branch = extra[0]
-        extra = extra[1:]
-    cfg = WatchConfig(version=ns.version, force_run=ns.force, tpu_num=ns.tpu_num, branch=branch, extra_args=extra, setup_cmd=ns.setup_cmd)
-    env = TPUEnvConfig.from_env()
-    watch_and_run(cfg, env)
-    return 0

@@ -158,44 +158,6 @@ class TPUManager:
         )
         return rc == 0
 
-    def stop(self, version: Literal["v4", "v5", "v6"]) -> bool:
-        zone = self._zone_for(version)
-        rc = run_streaming(
-            [
-                "gcloud",
-                "alpha",
-                "compute",
-                "tpus",
-                "tpu-vm",
-                "stop",
-                self.tpu_name,
-                "--zone",
-                zone,
-                "--project",
-                self.env.tpu_project,
-            ]
-        )
-        return rc == 0
-
-    def start(self, version: Literal["v4", "v5", "v6"]) -> bool:
-        zone = self._zone_for(version)
-        rc = run_streaming(
-            [
-                "gcloud",
-                "alpha",
-                "compute",
-                "tpus",
-                "tpu-vm",
-                "start",
-                self.tpu_name,
-                "--zone",
-                zone,
-                "--project",
-                self.env.tpu_project,
-            ]
-        )
-        return rc == 0
-
     def create(self, version: Literal["v4", "v5", "v6"], *, tpu_num: int, topology: str | None = None) -> bool:
         zone = self._zone_for(version)
         sa = self.env.service_account_for_zone(zone)
@@ -288,19 +250,6 @@ class TPUManager:
             no_shell_rc=True,
         )
 
-    def tmux_ls(self, version: Literal["v4", "v5", "v6"]) -> bool:
-        return (
-            gcloud_tpu_ssh_stream(
-                tpu_name=self.tpu_name,
-                project=self.env.tpu_project,
-                zone=self._zone_for(version),
-                worker="all",
-                command="tmux ls || true",
-                ssh=self.ssh,
-            )
-            == 0
-        )
-
     def tail_log(self, version: Literal["v4", "v5", "v6"], *, worker: int = 0) -> int:
         # Prefer tmux's LOG environment for the current session; fallback to newest log file.
         session = "tpu"
@@ -333,7 +282,7 @@ class TPUManager:
         )
         return rc
 
-    def tmux_kill_all(self, version: Literal["v4", "v5", "v6"]) -> bool:
+    def _tmux_kill_all(self, version: Literal["v4", "v5", "v6"]) -> bool:
         remote = (
             "set -euo pipefail;"
             "if command -v tmux >/dev/null 2>&1; then "
@@ -352,7 +301,7 @@ class TPUManager:
             == 0
         )
 
-    def kill_jax(self, version: Literal["v4", "v5", "v6"]) -> bool:
+    def _kill_jax(self, version: Literal["v4", "v5", "v6"]) -> bool:
         remote = (
             "set -euo pipefail;"
             "PIDS=$(pgrep -u $USER -f python || true);"
@@ -377,7 +326,7 @@ class TPUManager:
             == 0
         )
 
-    def clean_jax_tmp(self, version: Literal["v4", "v5", "v6"]) -> bool:
+    def _clean_jax_tmp(self, version: Literal["v4", "v5", "v6"]) -> bool:
         remote = (
             'echo "[INFO] Cleaning /tmp…";'
             "find /tmp -maxdepth 1 -user $USER "
@@ -422,7 +371,7 @@ class TPUManager:
             == 0
         )
 
-    def kill_device_holders(self, version: Literal["v4", "v5", "v6"]) -> bool:
+    def _kill_device_holders(self, version: Literal["v4", "v5", "v6"]) -> bool:
         """Kill python3 processes holding TPU device files (v4: /dev/accel0, v6: /dev/vfio/0)."""
         if version == "v4":
             remote = (
@@ -450,10 +399,10 @@ class TPUManager:
         )
 
     def nuke_all(self, version: Literal["v4", "v5", "v6"]) -> bool:
-        ok = self.tmux_kill_all(version)
-        ok = self.kill_jax(version) and ok
-        ok = self.kill_device_holders(version) and ok
-        ok = self.clean_jax_tmp(version) and ok
+        ok = self._tmux_kill_all(version)
+        ok = self._kill_jax(version) and ok
+        ok = self._kill_device_holders(version) and ok
+        ok = self._clean_jax_tmp(version) and ok
         return ok
 
     def list(self, version: TPUVersion) -> int:
@@ -461,68 +410,3 @@ class TPUManager:
         project = self.env.tpu_project
         rc = run_streaming(["gcloud", "compute", "tpus", "tpu-vm", "list", "--zone", zone, "--project", project])
         return rc
-
-    def list_all(self) -> int:
-        """List TPUs across all configured zones."""
-        project = self.env.tpu_project
-        any_found = False
-        for version, zone in self.env.zones.items():
-            print(f"--- {version} ({zone}) ---")
-            rc = run_streaming(
-                ["gcloud", "compute", "tpus", "tpu-vm", "list", "--zone", zone, "--project", project]
-            )
-            if rc == 0:
-                any_found = True
-            print()
-        return 0 if any_found else 1
-
-    def delete_by_name(self, version: TPUVersion, name: str) -> int:
-        zone = self._zone_for(version)
-        rc = run_streaming(
-            [
-                "gcloud",
-                "compute",
-                "tpus",
-                "tpu-vm",
-                "delete",
-                name,
-                "--project",
-                self.env.tpu_project,
-                "--zone",
-                zone,
-            ]
-        )
-        return rc
-
-    def check_activity(self, version: Literal["v4", "v5", "v6"]) -> bool:
-        """Return True if busy, False if idle. Failures => busy (conservative)."""
-        probe = r"""
-        set -e -o pipefail
-        uid=$(id -u)
-        for m in /proc/*/maps; do
-        [ -r "$m" ] || continue
-        if grep -qE 'libtpu|libxla|_xla_extension|libdevice' "$m" 2>/dev/null; then
-            pid=${m%/maps}; pid=${pid#/proc/}
-            puid=$(awk '/^Uid:/ {print $2}' "/proc/$pid/status" 2>/dev/null || echo -1)
-            if [ "$puid" = "$uid" ]; then
-            echo busy; exit 0
-            fi
-        fi
-        done
-        if pgrep -af '(^|/)python([0-9.])?' >/dev/null 2>&1; then echo busy; exit 0; fi
-        echo idle
-        """
-        encoded = base64.b64encode(probe.encode()).decode().replace("\n", "")
-        # Use non-streaming so we can parse the result.
-        proc = gcloud_tpu_ssh(
-            tpu_name=self.tpu_name,
-            project=self.env.tpu_project,
-            zone=self._zone_for(version),
-            worker="all",
-            command=f"bash -lc 'echo {encoded} | base64 -d | bash -s'",
-            ssh=self.ssh,
-        )
-        if proc.returncode != 0:
-            print(f"{_ts()} - SSH probe failed (rc={proc.returncode}); treating as busy.")
-            return True
-        return bool(re.search(r"(^|\r?\n)busy(\r?\n|$)", proc.stdout))

@@ -39,7 +39,6 @@ class TPUEnvConfig:
     tpu_bucket_v4: str
     tpu_bucket_v5: str
     tpu_bucket_v6: str
-    tpu_service_account: str
     gh_repo_name: str
     wandb_api_key: str
     gh_token: str
@@ -85,7 +84,6 @@ class TPUEnvConfig:
             tpu_bucket_v4=must_get("TPU_BUCKET_v4"),
             tpu_bucket_v5=must_get("TPU_BUCKET_v5"),
             tpu_bucket_v6=must_get("TPU_BUCKET_v6"),
-            tpu_service_account=must_get("TPU_SERVICE_ACCOUNT"),
             wandb_api_key=must_get("WANDB_API_KEY"),
             # Repo-related vars are optional fallback defaults; a job's --repo
             # flag takes precedence and bare-TPU mode needs none of these.

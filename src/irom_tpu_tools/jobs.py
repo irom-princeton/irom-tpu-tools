@@ -7,6 +7,7 @@ import os
 import signal
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from time import sleep
 from typing import Literal
 
 
@@ -90,17 +91,31 @@ def read_pid(name: str) -> int | None:
         return None
 
 
+def _pid_is_watcher(pid: int) -> bool:
+    """Verify the PID actually belongs to a watcher process, not a recycled PID."""
+    try:
+        cmdline = (
+            Path(f"/proc/{pid}/cmdline")
+            .read_bytes()
+            .replace(b"\x00", b" ")
+            .decode(errors="replace")
+        )
+        return "irom" in cmdline
+    except OSError:
+        return False
+
+
 def is_watcher_running(name: str) -> bool:
     pid = read_pid(name)
     if pid is None:
         return False
     try:
         os.kill(pid, 0)  # signal 0 = check existence
-        return True
     except ProcessLookupError:
         return False
     except PermissionError:
-        return True  # process exists but we can't signal it
+        pass  # process exists but we can't read it
+    return _pid_is_watcher(pid)
 
 
 def stop_watcher(name: str) -> bool:
@@ -111,8 +126,20 @@ def stop_watcher(name: str) -> bool:
     try:
         os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
-        pass
-    # Clean up PID file
+        _pid_file(name).unlink(missing_ok=True)
+        return False
+    # Wait up to 5 s for graceful exit, then SIGKILL
+    for _ in range(10):
+        sleep(0.5)
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            break
+    else:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
     try:
         _pid_file(name).unlink(missing_ok=True)
     except OSError:

@@ -31,26 +31,25 @@ When you make local changes to any file in the package, run `pipx install --forc
 Export the following variables (e.g. in your `~/.bashrc` or `~/.zshrc`):
 
 ```bash
-export TPU_NAME=<default_tpu_name>                   # optional fallback when --name is omitted. Format: <tpu_type>-<num_tpus>-<index>-<your_name> (e.g. v6-64-01-lihan)
-export TPU_PROJECT=<gcp_project_id>                  # ask your project admin
+export TPU_PROJECT=mae-irom-lab-guided-data          # ask your project admin
 export TPU_ZONE_v4=us-central2-b
 export TPU_ZONE_v5=us-central1-a
 export TPU_ZONE_v6=us-east1-d
-export TPU_BUCKET_v4=gs://my-bucket-v4               # ask your project admin
-export TPU_BUCKET_v5=gs://my-bucket-v5               # ask your project admin
-export TPU_BUCKET_v6=gs://my-bucket-v6               # ask your project admin
-export TPU_SERVICE_ACCOUNT=<service_account_email>   # ask your project admin
+export TPU_BUCKET_v4=gs://pi0-cot
+export TPU_BUCKET_v5=gs://v5_central1_a
+export TPU_BUCKET_v6=gs://v6_east1d
 export WANDB_API_KEY=<your_wandb_api_key>
+export GH_TOKEN=<your_github_personal_access_token>  # needs repo read access
 
 # Optional — used as defaults when `tpu create --repo` is omitted.
+export TPU_NAME=<default_tpu_name>                   # optional fallback when --name is omitted. Format: <tpu_type>-<num_tpus>-<index>-<your_name> (e.g. v6-64-01-lihan)
 export GH_REPO_NAME=<github_repo_name>               # repo to clone on the TPU
 export GH_OWNER=<your_github_username>               # owner of the repo/fork
-export GH_TOKEN=<your_github_personal_access_token>  # needs repo read access
 ```
 
 `GH_OWNER` / `GH_TOKEN` are used to clone via HTTPS (`https://<token>@github.com/<owner>/<repo>`), so this works with your own fork — you do **not** need to be the upstream repo owner.
 
-After this, you can run `export TPU_NAME=pi0 && tpu v4` to initialize. You will be prompted with some questions from google CLI, and answer yes. After the set up, type and run `exit` in your terminal to terminate the setup process.
+After this, you need to run `tpu attach pi0` to initialize. You will be prompted with some questions from google CLI, and answer yes. After the set up, type and run `exit` in your terminal to terminate the setup process.
 
 ---
 
@@ -65,7 +64,7 @@ tpu status               # check all tpu jobs managed by you
 
 ### Creating a TPU instance
 
-Different options for creating a tpu instance:
+Different options for creating a tpu instance. Note, `my-tpu` should follow the format of <tpu_type>-<num_tpus>-<index>-<your_name> (e.g. v6-64-01-lihan).
 ```bash
 # create bare tpu instance
 tpu create v6 --name my-tpu -n 8
@@ -80,14 +79,10 @@ tpu create v6 --name my-tpu -n 8 --repo usrname/reponame  --branch main --setup-
 
 To access your instance after creation
 ```bash
-# attach to the training tmux session on worker 0 (Ctrl-B+D to exit)
-tpu attach my-tpu 
-
-# read final lines of output
-tpu tail my-tpu
-
-# get tpu info
-tpu info my-tpu
+tpu attach my-tpu                   # attach to the training tmux session on worker 0 (Ctrl-B+D to exit)
+tpu tail my-tpu                     # read final lines of output
+tpu info my-tpu                     # get information about the tpu
+tpu logs my-tpu                     # show last 50 lines of the watcher log
 ```
 
 ### Stopping / Restarting / Deleting a TPU instance
@@ -139,7 +134,6 @@ The status/list tables include:
 | `tpu attach NAME --worker 1` | Attach on a specific worker |
 | `tpu tail NAME` | Tail last 50 lines of the latest tmux log on worker 0 |
 | `tpu tail NAME --worker 1` | Tail on a specific worker |
-| `tpu tmux-ls NAME` | List tmux sessions on all workers |
 | `tpu tmux NAME --session s -- <cmd>` | Run a command in a new/named tmux session on all workers |
 
 ### 🧹 Cleanup
@@ -147,9 +141,6 @@ The status/list tables include:
 | Command | Description |
 |---|---|
 | `tpu nuke NAME` | Kill tmux + JAX processes + clean tmp (full reset) |
-| `tpu kill-jax NAME` | Kill only JAX/XLA processes |
-| `tpu tmux-kill-all NAME` | Kill tmux server on all workers |
-| `tpu clean-tmp NAME` | Clean JAX/XLA temp files |
 | `tpu clean NAME` | Truncate system logs to free disk |
 
 ### 🔧 Advanced
@@ -159,11 +150,8 @@ The status/list tables include:
 | `tpu v4 -- <cmd>` | Run a raw SSH command on all v4 workers (no tmux) |
 | `tpu v4 --worker 0 -- <cmd>` | Run a raw command on a specific worker |
 | `tpu v4 setup` | Re-run the setup step (clone + install) on v4 workers |
-| `tpu watch v4 -n 8 -f main -- <cmd>` | **[Legacy]** Foreground watch loop (no daemon) |
 
 Replace `v4` with `v5` or `v6` as needed.
-
-You can use `tpu-tools` instead of `tpu` for any command.
 
 ---
 
@@ -177,7 +165,7 @@ irom-tpu-tools/
     config.py         # Env var loader
     jobs.py           # Persistent job state in ~/.tpu-jobs/
     tpu.py            # TPU lifecycle helpers (create/list/delete/tmux/kill/nuke)
-    watch.py          # Watcher daemon + legacy foreground watch
+    watch.py          # Watcher daemon
     __init__.py
   README.md
   LICENSE
