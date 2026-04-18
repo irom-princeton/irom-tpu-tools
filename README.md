@@ -85,19 +85,7 @@ tpu info my-tpu                     # get information about the tpu
 tpu logs my-tpu                     # show last 50 lines of the watcher log
 ```
 
-### Stopping / Restarting / Deleting a TPU instance
-
-`tpu stop` and `tpu start` both **preserve the TPU's resource allocation** — the VM and its attached disk stay provisioned, so your reservation/quota slot is held across the stop. Only `tpu delete` releases allocation.
-
-```bash
-# stop watcher + stop the TPU (allocation preserved)
-tpu stop my-tpu
-
-# restart and respawn watcher with the saved config
-tpu start my-tpu
-
-# restart with a NEW repo / setup / command
-tpu start my-tpu --repo usrname/reponame --branch main --setup-cmd "..." -- python scripts/other_train.py
+### Deleting a TPU instance
 
 # stop watcher + delete TPU (releases allocation)
 tpu delete my-tpu
