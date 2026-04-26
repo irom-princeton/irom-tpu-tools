@@ -694,11 +694,6 @@ def _do_rerun(ns: argparse.Namespace, env: TPUEnvConfig) -> int:
             f"No managed job named '{tpu_name}'. Use `tpu create` to start one."
         ) from None
 
-    # Stop the existing watcher so we don't end up with two daemons.
-    if is_watcher_running(tpu_name):
-        print(f"Stopping existing watcher for '{tpu_name}'...")
-        stop_watcher(tpu_name)
-
     create_ns = argparse.Namespace(
         cmd="create",
         name=tpu_name,

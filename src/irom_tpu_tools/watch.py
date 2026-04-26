@@ -291,8 +291,16 @@ def watch_loop(job: JobConfig, env: TPUEnvConfig, *, force_run: bool = False) ->
 
 
 def spawn_watcher(job: JobConfig, env: TPUEnvConfig, *, force_run: bool = False) -> int:
-    """Fork a background watcher daemon. Returns the daemon PID."""
-    from .jobs import log_path, save_pid
+    """Fork a background watcher daemon. Returns the daemon PID.
+
+    Enforces the invariant of one watcher per TPU name: if a watcher is
+    already running for this job, it is stopped before the new one is forked.
+    """
+    from .jobs import is_watcher_running, log_path, save_pid, stop_watcher
+
+    if is_watcher_running(job.name):
+        print(f"Stopping existing watcher for '{job.name}'...")
+        stop_watcher(job.name)
 
     log_file = log_path(job.name)
     log_file.parent.mkdir(parents=True, exist_ok=True)
