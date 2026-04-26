@@ -86,6 +86,17 @@ tpu info my-tpu                     # get information about the tpu
 tpu logs my-tpu                     # show last 50 lines of the watcher log
 ```
 
+### Re-running an existing job
+
+If you want to relaunch the same setup + command on a managed TPU (e.g. after manually killing training, or to restart on a still-allocated TPU), use `rerun`. It loads the saved config and reuses the `tpu create` flow:
+
+```bash
+tpu rerun my-tpu        # prompts before relaunching on a READY TPU
+tpu rerun my-tpu -f     # skip prompt
+```
+
+`tpu info my-tpu` shows what will be re-run (repo, branch, setup, command).
+
 ### Deleting a TPU instance
 ```
 # stop watcher + delete TPU (releases allocation)

@@ -85,6 +85,10 @@ def _print_commands() -> None:
                     "tpu create v4 -n 8 --name my-tpu -- python train.py",
                     "Create TPU, setup, launch training, start background watcher",
                 ),
+                (
+                    "tpu rerun my-tpu",
+                    "Re-run saved setup + command for a managed job (reuses last config)",
+                ),
                 ("tpu delete my-tpu", "Delete TPU and stop its background watcher"),
                 (
                     "tpu nuke my-tpu",
@@ -236,6 +240,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--lines", "-n", type=int, default=50, help="Number of lines to show"
     )
     p_logs.add_argument("--follow", "-f", action="store_true", help="Follow log output")
+
+    # --- rerun: relaunch saved setup + command on an existing managed job ---
+    p_rerun = sub.add_parser(
+        "rerun",
+        help="Re-run the saved setup + command for a managed job (uses last config)",
+    )
+    _add_name_arg(p_rerun)
+    p_rerun.add_argument(
+        "--force",
+        "-f",
+        action="store_true",
+        help="If TPU is already READY, re-run setup and command without prompting",
+    )
 
     # --- per-TPU commands: take optional name, auto-detect version/zone ---
     p_delete = sub.add_parser("delete", help="Delete a TPU (also stops watcher)")
@@ -657,6 +674,46 @@ def _do_create(ns: argparse.Namespace, env: TPUEnvConfig, extra_args: list[str])
     return 0
 
 
+# ---- rerun ----
+
+
+def _do_rerun(ns: argparse.Namespace, env: TPUEnvConfig) -> int:
+    """Re-run the saved setup + command for a managed job.
+
+    Loads the persisted JobConfig and dispatches through _do_create so the
+    create flow (existence check, optional prompt, watcher spawn) is reused.
+    """
+    tpu_name = ns.name or env.tpu_name
+    if not tpu_name:
+        raise SystemExit("Error: no TPU name provided and TPU_NAME is not set")
+
+    try:
+        job = JobConfig.load(tpu_name)
+    except FileNotFoundError:
+        raise SystemExit(
+            f"No managed job named '{tpu_name}'. Use `tpu create` to start one."
+        ) from None
+
+    # Stop the existing watcher so we don't end up with two daemons.
+    if is_watcher_running(tpu_name):
+        print(f"Stopping existing watcher for '{tpu_name}'...")
+        stop_watcher(tpu_name)
+
+    create_ns = argparse.Namespace(
+        cmd="create",
+        name=tpu_name,
+        version=job.version,
+        tpu_num=job.tpu_num,
+        repo=job.repo,
+        branch=job.branch,
+        setup_cmd=job.setup_cmd,
+        force=ns.force,
+        commands=False,
+    )
+    extra = [job.command] if job.command else []
+    return _do_create(create_ns, env, extra)
+
+
 # ---- logs ----
 
 
@@ -704,6 +761,11 @@ def main(argv: list[str] | None = None) -> int:
             extra = extra[1:]
         env = TPUEnvConfig.from_env(require_tpu_name=not ns.name)
         return _do_create(ns, env, extra)
+
+    # --- rerun ---
+    if ns.cmd == "rerun":
+        env = TPUEnvConfig.from_env(require_tpu_name=not ns.name)
+        return _do_rerun(ns, env)
 
     # --- watch (legacy) ---
     if ns.cmd == "watch":

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import base64
-from datetime import datetime
 import os
 import signal
-from string import Template
 import sys
+from datetime import datetime
+from string import Template
 from time import sleep
 
 from .config import TPUEnvConfig
