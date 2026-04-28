@@ -49,7 +49,7 @@ export GH_OWNER=<your_github_username>               # owner of the repo/fork
 
 `GH_OWNER` / `GH_TOKEN` are used to clone via HTTPS (`https://<token>@github.com/<owner>/<repo>`), so this works with your own fork — you do **not** need to be the upstream repo owner.
 
-After this, you need to run `tpu attach pi0` to initialize. You will be prompted with some questions from google CLI, and answer yes. After the set up, type and run `exit` in your terminal to terminate the setup process.
+After this, you need to run `gcloud alpha compute tpus tpu-vm` to initialize. You will be prompted with some questions from google CLI, and answer yes.
 
 ---
 
