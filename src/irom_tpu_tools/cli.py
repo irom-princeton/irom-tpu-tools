@@ -257,6 +257,13 @@ def build_parser() -> argparse.ArgumentParser:
     # --- per-TPU commands: take optional name, auto-detect version/zone ---
     p_delete = sub.add_parser("delete", help="Delete a TPU (also stops watcher)")
     _add_name_arg(p_delete)
+    p_delete.add_argument(
+        "--version",
+        "-v",
+        choices=("v4", "v5", "v6"),
+        default=None,
+        help="TPU version to disambiguate when the same name exists in multiple zones",
+    )
 
     p_tmux = sub.add_parser("tmux", help="Run a tmux command on all workers")
     _add_name_arg(p_tmux)
@@ -824,8 +831,13 @@ def main(argv: list[str] | None = None) -> int:
         # Remove job state
         remove_job(tpu_name)
         # Try to resolve and delete the actual TPU (may already be gone)
+        version = getattr(ns, "version", None)
         try:
-            mgr = _resolve_mgr(env, name)
+            if version is not None:
+                mgr = TPUManager(env).for_tpu(tpu_name, version, env.zones[version])
+                print(f"Deleting {tpu_name} from {version} ({env.zones[version]})...")
+            else:
+                mgr = _resolve_mgr(env, name)
             ok = mgr.delete(mgr.version)
             return 0 if ok else 1
         except SystemExit:
