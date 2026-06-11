@@ -149,6 +149,8 @@ def _create_queued_resource(env: TPUEnvConfig, version: str, tpu_num: int, *, na
         name,
         "--service-account",
         sa,
+        "--provisioning-model",
+        "SPOT",
         "--spot",
         "--async",
     ]
