@@ -504,6 +504,8 @@ def watch_and_run(cfg: WatchConfig, env: TPUEnvConfig) -> None:
 
     training_launched = False
     waiting_for_queued_resource = False
+    active_qr_missing_node_checks = 0
+    stale_active_qr_checks = int(os.environ.get("TPU_WATCH_STALE_ACTIVE_QR_CHECKS", "2"))
     queued_supported = cfg.version in {"v5", "v6"} and os.environ.get("TPU_WATCH_USE_QUEUED", "1") != "0"
     qr_name = _queued_resource_name(env.tpu_name)
     while True:
@@ -528,6 +530,7 @@ def watch_and_run(cfg: WatchConfig, env: TPUEnvConfig) -> None:
         run_setup_and_training = False
         if state in {"NOT_FOUND", "PREEMPTED", "STOPPED"}:
             if queued_supported:
+                deleted_node_for_replacement = False
                 if state != "NOT_FOUND":
                     print(f"{_ts()} - TPU state is {state}; deleting node before queueing replacement.")
                     if not mgr.delete(cfg.version):
@@ -535,22 +538,50 @@ def watch_and_run(cfg: WatchConfig, env: TPUEnvConfig) -> None:
                         sys.stdout.flush()
                         sleep(mgr.sleep_secs)
                         continue
+                    deleted_node_for_replacement = True
 
                 qr_state, _ = _describe_queued_resource(env, cfg.version, qr_name)
+                qr_state_upper = qr_state.upper()
                 if qr_state == "NOT_FOUND":
+                    active_qr_missing_node_checks = 0
                     print(f"{_ts()} - Creating queued resource {qr_name} for node {env.tpu_name}...")
                     if not _create_queued_resource(env, cfg.version, cfg.tpu_num, name=env.tpu_name):
                         print(f"{_ts()} - Queued resource create failed; will retry.")
                     else:
                         waiting_for_queued_resource = True
                         print(f"{_ts()} - Queued resource submitted; waiting for capacity.")
-                elif "FAILED" in qr_state.upper():
+                elif "FAILED" in qr_state_upper:
+                    active_qr_missing_node_checks = 0
                     print(f"{_ts()} - Queued resource {qr_name} is failed ({qr_state}); recreating it.")
                     if _delete_queued_resource(env, cfg.version, qr_name):
                         waiting_for_queued_resource = False
                     else:
                         print(f"{_ts()} - Failed to delete queued resource {qr_name}; will retry.")
+                elif "ACTIVE" in qr_state_upper and (state == "NOT_FOUND" or deleted_node_for_replacement):
+                    if deleted_node_for_replacement:
+                        active_qr_missing_node_checks = stale_active_qr_checks
+                    else:
+                        active_qr_missing_node_checks += 1
+
+                    if active_qr_missing_node_checks >= stale_active_qr_checks:
+                        print(
+                            f"{_ts()} - Queued resource {qr_name} is ACTIVE but node "
+                            f"{env.tpu_name} is absent; deleting stale queued resource."
+                        )
+                        if _delete_queued_resource(env, cfg.version, qr_name):
+                            waiting_for_queued_resource = False
+                            active_qr_missing_node_checks = 0
+                        else:
+                            print(f"{_ts()} - Failed to delete queued resource {qr_name}; will retry.")
+                    else:
+                        waiting_for_queued_resource = True
+                        print(
+                            f"{_ts()} - Queued resource {qr_name} is ACTIVE but node "
+                            f"{env.tpu_name} is not visible yet "
+                            f"({active_qr_missing_node_checks}/{stale_active_qr_checks}); waiting."
+                        )
                 else:
+                    active_qr_missing_node_checks = 0
                     waiting_for_queued_resource = True
                     print(f"{_ts()} - Waiting for queued resource {qr_name}; current state: {qr_state}.")
                 sys.stdout.flush()
@@ -579,6 +610,7 @@ def watch_and_run(cfg: WatchConfig, env: TPUEnvConfig) -> None:
                 continue
             run_setup_and_training = True
         elif state == "READY":
+            active_qr_missing_node_checks = 0
             run_setup_and_training = (cfg.force_run or waiting_for_queued_resource) and not training_launched
             if not run_setup_and_training:
                 print(f"{_ts()} - TPU READY; training already launched or force not requested.")
