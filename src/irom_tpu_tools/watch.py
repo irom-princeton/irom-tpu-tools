@@ -550,9 +550,9 @@ def watch_and_run(cfg: WatchConfig, env: TPUEnvConfig) -> None:
                     else:
                         waiting_for_queued_resource = True
                         print(f"{_ts()} - Queued resource submitted; waiting for capacity.")
-                elif "FAILED" in qr_state_upper:
+                elif "FAILED" in qr_state_upper or "SUSPENDED" in qr_state_upper:
                     active_qr_missing_node_checks = 0
-                    print(f"{_ts()} - Queued resource {qr_name} is failed ({qr_state}); recreating it.")
+                    print(f"{_ts()} - Queued resource {qr_name} is unusable ({qr_state}); recreating it.")
                     if _delete_queued_resource(env, cfg.version, qr_name):
                         waiting_for_queued_resource = False
                     else:
