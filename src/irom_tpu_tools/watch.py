@@ -529,6 +529,7 @@ def watch_and_run(cfg: WatchConfig, env: TPUEnvConfig) -> None:
 
         run_setup_and_training = False
         if state in {"NOT_FOUND", "PREEMPTED", "STOPPED"}:
+            training_launched = False
             if queued_supported:
                 deleted_node_for_replacement = False
                 if state != "NOT_FOUND":
