@@ -695,8 +695,7 @@ def watch_and_run(cfg: WatchConfig, env: TPUEnvConfig) -> None:
                 waiting_for_queued_resource = False
                 print(f"{_ts()} - Training launch complete.")
                 if cfg.force_run:
-                    print(f"{_ts()} - Force run requested; exiting.")
-                    return
+                    print(f"{_ts()} - Force run requested; continuing to watch for recovery.")
             else:
                 print(f"{_ts()} - Setup/launch failed; will retry.")
 
@@ -707,7 +706,12 @@ def watch_and_run(cfg: WatchConfig, env: TPUEnvConfig) -> None:
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="tpu watch")
     parser.add_argument("version", choices=["v4", "v5", "v6"], help="TPU version to target")
-    parser.add_argument("--force", "-f", action="store_true", help="Force setup/training if READY")
+    parser.add_argument(
+        "--force",
+        "-f",
+        action="store_true",
+        help="Force setup/training if READY, then continue watching for recovery",
+    )
     parser.add_argument("--tpu-num", "-n", type=int, default=8, help="TPU chips")
     parser.add_argument("--setup-cmd", "-s", default="uv sync", help="Setup command to run after clone")
     return parser

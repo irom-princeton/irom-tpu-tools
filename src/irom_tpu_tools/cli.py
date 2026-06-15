@@ -226,7 +226,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--force",
         "-f",
         action="store_true",
-        help="Force setup and training if the TPU is already READY, then exit after launch",
+        help="Force setup and training if the TPU is already READY, then continue watching for recovery",
     )
     p_watch.add_argument("--tpu-num", "-n", type=int, default=8, help="TPU chips")
     p_watch.add_argument(
