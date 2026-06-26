@@ -9,6 +9,7 @@ from pathlib import Path
 import sys
 import tempfile
 import time
+from typing import Any
 
 from .backend import Backend, DryRunBackend, GCPBackend
 from .config import (
@@ -236,6 +237,8 @@ def cmd_list(args: argparse.Namespace) -> int:
     mode = (
         "resources"
         if getattr(args, "resources", False)
+        else "live"
+        if getattr(args, "live", False)
         else "jobs"
         if getattr(args, "jobs", False)
         else "auto"
@@ -273,13 +276,22 @@ def cmd_list(args: argparse.Namespace) -> int:
             ]
         )
     rows.sort(key=lambda row: (row[2] in {"SUCCEEDED", "FAILED", "CANCELED"}, row[-1], row[0]))
-    if mode == "auto" and not rows and not job_only_filters:
-        if args.version:
-            print(f"No queued {args.version} jobs found. Requestable resources:")
-        else:
-            print("No queued jobs found. Requestable resources:")
+    if mode == "live":
+        if job_only_filters:
+            raise SystemExit("--user, --active, and --status only apply to --jobs")
+        return _print_live_tpus(config, backend, version=args.version)
+    if mode == "auto" and not job_only_filters:
+        print("Queued jobs:")
+        _print_table(
+            ["JOB ID", "NAME", "STATUS", "ATT", "RESOURCE", "CHIPS", "USER", "SUBMITTED"],
+            rows,
+        )
         print()
-        return _print_resource_catalog(config, version=args.version)
+        print("Requestable resources:")
+        _print_resource_catalog(config, version=args.version)
+        print()
+        print("Live TPU VMs:")
+        return _print_live_tpus(config, backend, version=args.version)
     _print_table(
         ["JOB ID", "NAME", "STATUS", "ATT", "RESOURCE", "CHIPS", "USER", "SUBMITTED"],
         rows,
@@ -494,6 +506,78 @@ def _print_resource_catalog(config: QueueConfig, *, version: str | None = None) 
         print()
         print("Shared interactive TPUs:")
         _print_table(["NAME", "ALIASES", "ZONE", "WORKERS", "DESCRIPTION"], interactive_rows)
+    return 0
+
+
+def _short_name(value: Any) -> str:
+    return str(value or "-").rsplit("/", 1)[-1]
+
+
+def _infer_tpu_version(
+    config: QueueConfig,
+    *,
+    zone: str,
+    accelerator_type: str,
+    requested_version: str | None,
+) -> str:
+    if requested_version:
+        return requested_version
+    for resource in config.resources.values():
+        if resource.zone == zone and resource.accelerator_type == accelerator_type:
+            return resource.version
+    if accelerator_type.startswith("v4"):
+        return "v4"
+    if accelerator_type.startswith("v5"):
+        return "v5"
+    if accelerator_type.startswith("v6"):
+        return "v6"
+    return "-"
+
+
+def _live_inventory_targets(
+    config: QueueConfig, *, version: str | None
+) -> list[tuple[str, str]]:
+    targets: set[tuple[str, str]] = set()
+    for resource in config.resources.values():
+        if version is None or resource.version == version:
+            targets.add((resource.project, resource.zone))
+    for tpu in config.interactive_tpus.values():
+        if version is None or tpu.version == version:
+            targets.add((tpu.project, tpu.zone))
+    return sorted(targets)
+
+
+def _print_live_tpus(
+    config: QueueConfig, backend: Backend, *, version: str | None = None
+) -> int:
+    rows = []
+    seen: set[tuple[str, str, str]] = set()
+    for project, zone in _live_inventory_targets(config, version=version):
+        for vm in backend.list_tpu_vms(project, zone):
+            name = _short_name(vm.get("name"))
+            key = (project, zone, name)
+            if key in seen:
+                continue
+            seen.add(key)
+            accelerator = _short_name(vm.get("acceleratorType"))
+            rows.append(
+                [
+                    name,
+                    _infer_tpu_version(
+                        config,
+                        zone=zone,
+                        accelerator_type=accelerator,
+                        requested_version=version,
+                    ),
+                    accelerator,
+                    zone,
+                    str(vm.get("state") or "-"),
+                    str(vm.get("health") or "-"),
+                    str(vm.get("createTime") or "-")[:19],
+                ]
+            )
+    rows.sort(key=lambda row: (row[1], row[3], row[0]))
+    _print_table(["NAME", "VERSION", "ACCEL", "ZONE", "STATE", "HEALTH", "CREATED"], rows)
     return 0
 
 
@@ -784,14 +868,16 @@ def build_parser() -> argparse.ArgumentParser:
         "list",
         help="List queued jobs or requestable TPU resources",
         description=(
-            "List queued jobs. If no matching jobs exist and no job-only filters "
-            "are used, show requestable configured resources instead."
+            "Show a TPU overview by default: queued jobs, requestable resources, "
+            "shared interactive TPUs, and live TPU VMs visible to this account. "
+            "Use --jobs, --resources, or --live for a strict single view."
         ),
     )
     list_p.add_argument("version", nargs="?", choices=["v4", "v5", "v6"])
     mode = list_p.add_mutually_exclusive_group()
     mode.add_argument("--jobs", action="store_true", help="Only show queued jobs")
     mode.add_argument("--resources", action="store_true", help="Only show resources")
+    mode.add_argument("--live", action="store_true", help="Only show live TPU VMs")
     list_p.add_argument("--user")
     list_p.add_argument("--active", "-a", action="store_true")
     list_p.add_argument("--status")

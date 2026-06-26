@@ -206,6 +206,9 @@ class SchedulerTests(unittest.TestCase):
         config = load_config()
         self.assertIn("v4-4-01-interactive", config.interactive_tpus)
         self.assertEqual(config.interactive_tpus["v4-4-01-interactive"].version, "v4")
+        self.assertIn("v4-16-01-interactive", config.interactive_tpus)
+        self.assertIn("v4-4-04-interactive", config.interactive_tpus)
+        self.assertEqual(config.interactive_tpus["v4-16-01-interactive"].workers, 4)
 
     def test_interactive_parser_has_no_lifecycle_verbs(self) -> None:
         parser = build_parser()
@@ -217,7 +220,7 @@ class SchedulerTests(unittest.TestCase):
             with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()):
                 parser.parse_args(["interactive", forbidden, "v4-interactive"])
 
-    def test_list_falls_back_to_resource_catalog_when_no_jobs(self) -> None:
+    def test_list_defaults_to_overview_when_no_jobs(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
             parser = build_parser()
@@ -236,7 +239,9 @@ class SchedulerTests(unittest.TestCase):
             with redirect_stdout(out):
                 args.func(args)
             text = out.getvalue()
-            self.assertIn("No queued v6 jobs found. Requestable resources:", text)
+            self.assertIn("Queued jobs:", text)
+            self.assertIn("Requestable resources:", text)
+            self.assertIn("Live TPU VMs:", text)
             self.assertIn("v6-8", text)
             self.assertIn("v6e-8", text)
 
@@ -260,6 +265,46 @@ class SchedulerTests(unittest.TestCase):
             with redirect_stdout(out):
                 args.func(args)
             self.assertEqual(out.getvalue(), "(none)\n")
+
+    def test_list_live_shows_active_tpu_vms(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            config_path = write_config_file(root)
+            state_dir = root / "state"
+            backend = DryRunBackend(str(state_dir))
+            backend.create_queued_resource(
+                name="iqtest-live",
+                node_id="iqtest-live",
+                project="test-project",
+                zone="us-east1-d",
+                accelerator_type="v6e-8",
+                runtime_version="v2-alpha-tpuv6e",
+                spot=True,
+                startup_script_path="",
+                service_account=None,
+            )
+            backend.force_active("iqtest-live")
+
+            parser = build_parser()
+            args = parser.parse_args(
+                [
+                    "--config",
+                    str(config_path),
+                    "--dry-run",
+                    "--base-dir",
+                    str(state_dir),
+                    "list",
+                    "--live",
+                    "v6",
+                ]
+            )
+            out = io.StringIO()
+            with redirect_stdout(out):
+                args.func(args)
+            text = out.getvalue()
+            self.assertIn("iqtest-live", text)
+            self.assertIn("v6e-8", text)
+            self.assertIn("READY", text)
 
 
 if __name__ == "__main__":

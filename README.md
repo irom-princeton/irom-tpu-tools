@@ -71,15 +71,15 @@ tpu list
 tpu list v6
 tpu list --jobs v6 --active
 tpu list --resources v4
+tpu list --live v4
 tpu status <job_id_or_name>
 tpu logs <job_id_or_name> --lines 200
 tpu tail <job_id_or_name> --follow
 ```
 
-By default, `tpu list [v4|v5|v6]` lists queued jobs. If no matching jobs exist,
-it shows the requestable resource catalog instead of a bare empty table. Use
-`--jobs` for a strict queued-job view, or `--resources` for a strict resource
-catalog view.
+By default, `tpu list [v4|v5|v6]` shows an overview: queued jobs, requestable
+resource sizes, shared interactive TPUs, and live TPU VMs visible to the current
+account. Use `--jobs`, `--resources`, or `--live` for a strict single view.
 
 Cancel or retry:
 
@@ -104,7 +104,9 @@ command path.
 tpu interactive list
 tpu interactive list --live
 tpu interactive info v4-interactive
+tpu interactive info v4-16-interactive
 tpu interactive ssh v4-interactive --worker 0
+tpu interactive ssh v4-16-interactive --worker 0
 tpu interactive run v4-interactive -- hostname
 tpu interactive tmux v4-interactive --session debug -- python scratch.py
 tpu interactive attach v4-interactive --session debug
@@ -114,8 +116,10 @@ tpu interactive get v4-interactive ~/remote.txt ./remote.txt
 ```
 
 Interactive commands resolve only configured TPU names or aliases. The packaged
-default includes `v4-4-01-interactive` with alias `v4-interactive`; admins should
-edit that allowlist to match the actual shared v4 TPU inventory.
+default includes `v4-16-01-interactive` plus `v4-4-01-interactive` through
+`v4-4-04-interactive`. Useful aliases include `v4-interactive`,
+`v4-16-interactive`, `v4-32-interactive`, and `v4-4-interactive-01` through
+`v4-4-interactive-04`.
 
 Interactive users need only the project/IAP/OS Login permissions required to SSH
 to the existing TPU VM and perform normal file I/O on it. They do not need TPU
