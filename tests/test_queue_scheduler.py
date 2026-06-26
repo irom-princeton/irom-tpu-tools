@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import UTC, datetime
 import io
 import json
@@ -103,6 +103,36 @@ def write_job(backend: DryRunBackend, bucket: str, spec: JobSpec) -> str:
     return job_dir
 
 
+def write_config_file(tmp: Path) -> Path:
+    path = tmp / "resources.yaml"
+    path.write_text(
+        """
+quota_groups:
+  v6:
+    total_chips: 8
+resources:
+  v6-8:
+    version: v6
+    accelerator_type: v6e-8
+    runtime_version: v2-alpha-tpuv6e
+    zone: us-east1-d
+    project: test-project
+    chips: 8
+    workers: 1
+    spot: true
+    enabled: true
+    quota_group: v6
+buckets:
+  us-east1: gs://test-bucket/queue
+primary_bucket_region: us-east1
+scheduler:
+  qr_prefix: iqtest
+interactive_tpus: {}
+""".lstrip()
+    )
+    return path
+
+
 class SchedulerTests(unittest.TestCase):
     def test_schedules_and_requeues_after_preemption(self) -> None:
         with tempfile.TemporaryDirectory() as d:
@@ -186,6 +216,50 @@ class SchedulerTests(unittest.TestCase):
         for forbidden in ("create", "delete", "stop", "start"):
             with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()):
                 parser.parse_args(["interactive", forbidden, "v4-interactive"])
+
+    def test_list_falls_back_to_resource_catalog_when_no_jobs(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            parser = build_parser()
+            args = parser.parse_args(
+                [
+                    "--config",
+                    str(write_config_file(root)),
+                    "--dry-run",
+                    "--base-dir",
+                    str(root / "state"),
+                    "list",
+                    "v6",
+                ]
+            )
+            out = io.StringIO()
+            with redirect_stdout(out):
+                args.func(args)
+            text = out.getvalue()
+            self.assertIn("No queued v6 jobs found. Requestable resources:", text)
+            self.assertIn("v6-8", text)
+            self.assertIn("v6e-8", text)
+
+    def test_list_jobs_can_still_show_empty_job_list(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            parser = build_parser()
+            args = parser.parse_args(
+                [
+                    "--config",
+                    str(write_config_file(root)),
+                    "--dry-run",
+                    "--base-dir",
+                    str(root / "state"),
+                    "list",
+                    "--jobs",
+                    "v6",
+                ]
+            )
+            out = io.StringIO()
+            with redirect_stdout(out):
+                args.func(args)
+            self.assertEqual(out.getvalue(), "(none)\n")
 
 
 if __name__ == "__main__":

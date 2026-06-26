@@ -68,11 +68,18 @@ List and inspect:
 
 ```bash
 tpu list
-tpu list v6 --active
+tpu list v6
+tpu list --jobs v6 --active
+tpu list --resources v4
 tpu status <job_id_or_name>
 tpu logs <job_id_or_name> --lines 200
 tpu tail <job_id_or_name> --follow
 ```
+
+By default, `tpu list [v4|v5|v6]` lists queued jobs. If no matching jobs exist,
+it shows the requestable resource catalog instead of a bare empty table. Use
+`--jobs` for a strict queued-job view, or `--resources` for a strict resource
+catalog view.
 
 Cancel or retry:
 

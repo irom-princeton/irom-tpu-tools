@@ -233,6 +233,19 @@ def cmd_create(args: argparse.Namespace) -> int:
 def cmd_list(args: argparse.Namespace) -> int:
     config = _load_config(args)
     backend = _backend(args)
+    mode = (
+        "resources"
+        if getattr(args, "resources", False)
+        else "jobs"
+        if getattr(args, "jobs", False)
+        else "auto"
+    )
+    job_only_filters = bool(args.user or args.active or args.status)
+    if mode == "resources":
+        if job_only_filters:
+            raise SystemExit("--user, --active, and --status only apply to --jobs")
+        return _print_resource_catalog(config, version=args.version)
+
     entries = _load_scheduler_state(backend, config)
     rows = []
     for entry in entries:
@@ -260,6 +273,13 @@ def cmd_list(args: argparse.Namespace) -> int:
             ]
         )
     rows.sort(key=lambda row: (row[2] in {"SUCCEEDED", "FAILED", "CANCELED"}, row[-1], row[0]))
+    if mode == "auto" and not rows and not job_only_filters:
+        if args.version:
+            print(f"No queued {args.version} jobs found. Requestable resources:")
+        else:
+            print("No queued jobs found. Requestable resources:")
+        print()
+        return _print_resource_catalog(config, version=args.version)
     _print_table(
         ["JOB ID", "NAME", "STATUS", "ATT", "RESOURCE", "CHIPS", "USER", "SUBMITTED"],
         rows,
@@ -436,7 +456,45 @@ def cmd_admin_jobs(args: argparse.Namespace) -> int:
     args.user = getattr(args, "user", None)
     args.active = getattr(args, "active", False)
     args.status = getattr(args, "status", None)
+    args.jobs = True
+    args.resources = False
     return cmd_list(args)
+
+
+def _print_resource_catalog(config: QueueConfig, *, version: str | None = None) -> int:
+    resource_rows = [
+        [
+            r.name,
+            r.accelerator_type,
+            r.zone,
+            str(r.chips),
+            str(r.workers),
+            r.quota_group,
+            "yes" if r.enabled else "no",
+        ]
+        for r in sorted(config.resources.values(), key=lambda x: x.name)
+        if version is None or r.version == version
+    ]
+    _print_table(
+        ["RESOURCE", "ACCEL", "ZONE", "CHIPS", "WORKERS", "GROUP", "ENABLED"],
+        resource_rows,
+    )
+    interactive_rows = [
+        [
+            t.name,
+            ", ".join(t.aliases) if t.aliases else "-",
+            t.zone,
+            str(t.workers),
+            t.description or "-",
+        ]
+        for t in sorted(config.interactive_tpus.values(), key=lambda x: x.name)
+        if version is None or t.version == version
+    ]
+    if interactive_rows:
+        print()
+        print("Shared interactive TPUs:")
+        _print_table(["NAME", "ALIASES", "ZONE", "WORKERS", "DESCRIPTION"], interactive_rows)
+    return 0
 
 
 def cmd_admin_resources(args: argparse.Namespace) -> int:
@@ -451,18 +509,7 @@ def cmd_admin_resources(args: argparse.Namespace) -> int:
     _print_table(["GROUP", "USED", "LIMIT"], rows)
     print()
     print("Enabled resources:")
-    resource_rows = [
-        [
-            r.name,
-            r.accelerator_type,
-            r.zone,
-            str(r.chips),
-            r.quota_group,
-            "yes" if r.enabled else "no",
-        ]
-        for r in sorted(config.resources.values(), key=lambda x: x.name)
-    ]
-    _print_table(["RESOURCE", "ACCEL", "ZONE", "CHIPS", "GROUP", "ENABLED"], resource_rows)
+    _print_resource_catalog(config)
     print()
     if by_user:
         print("Active chips by user:")
@@ -733,8 +780,18 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument("--worker0-only", action="store_true")
     create.set_defaults(func=cmd_create)
 
-    list_p = sub.add_parser("list", help="List queued jobs")
+    list_p = sub.add_parser(
+        "list",
+        help="List queued jobs or requestable TPU resources",
+        description=(
+            "List queued jobs. If no matching jobs exist and no job-only filters "
+            "are used, show requestable configured resources instead."
+        ),
+    )
     list_p.add_argument("version", nargs="?", choices=["v4", "v5", "v6"])
+    mode = list_p.add_mutually_exclusive_group()
+    mode.add_argument("--jobs", action="store_true", help="Only show queued jobs")
+    mode.add_argument("--resources", action="store_true", help="Only show resources")
     list_p.add_argument("--user")
     list_p.add_argument("--active", "-a", action="store_true")
     list_p.add_argument("--status")
