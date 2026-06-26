@@ -10,7 +10,7 @@ quota_groups:
   v5:
     total_chips: 64
   v6:
-    total_chips: 64
+    total_chips: 512
 
 resources:
   v4-4:
@@ -231,7 +231,7 @@ scheduler:
   qr_label_workaround: false
 
 user_limits:
-  default_max_chips: 64
+  default_max_chips: 192
   users: {}
 
 secrets:
