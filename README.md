@@ -90,6 +90,8 @@ TPU VM and queued-resource cleanup.
 Shared v4 interactive TPUs are configured under `interactive_tpus` in
 `resources.yaml`. Users can connect to and move files on these allowlisted TPUs,
 but this command group intentionally has no create/delete/stop/start actions.
+Admins create, stop, start, and delete these shared TPUs outside the user
+command path.
 
 ```bash
 tpu interactive list
@@ -107,6 +109,11 @@ tpu interactive get v4-interactive ~/remote.txt ./remote.txt
 Interactive commands resolve only configured TPU names or aliases. The packaged
 default includes `v4-4-01-interactive` with alias `v4-interactive`; admins should
 edit that allowlist to match the actual shared v4 TPU inventory.
+
+Interactive users need only the project/IAP/OS Login permissions required to SSH
+to the existing TPU VM and perform normal file I/O on it. They do not need TPU
+Admin because `tpu interactive` never creates, deletes, stops, or starts TPU
+resources.
 
 ## Scheduler
 
@@ -152,6 +159,8 @@ Normal users need:
 
 - `storage.objects.create/get/list` on queue prefixes.
 - Read access to their logs/status.
+- SSH/IAP/OS Login access to allowlisted shared interactive TPUs, if they use
+  `tpu interactive`.
 - No TPU Admin role.
 
 Scheduler/admin identity needs:
