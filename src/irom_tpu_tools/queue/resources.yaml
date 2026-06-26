@@ -234,5 +234,6 @@ user_limits:
   default_max_chips: 192
   users: {}
 
-secrets:
-  WANDB_API_KEY: wandb-api-key
+# Optional default Secret Manager mappings for queued workers. Keep empty unless
+# the referenced secret exists and the TPU service account can read it.
+secrets: {}
