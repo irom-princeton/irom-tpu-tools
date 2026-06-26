@@ -247,7 +247,7 @@ class SchedulerTests(unittest.TestCase):
             with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()):
                 parser.parse_args(["interactive", forbidden, "v4-interactive"])
 
-    def test_list_defaults_to_overview_when_no_jobs(self) -> None:
+    def test_list_defaults_to_jobs_and_live_only_when_no_jobs(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
             parser = build_parser()
@@ -267,10 +267,60 @@ class SchedulerTests(unittest.TestCase):
                 args.func(args)
             text = out.getvalue()
             self.assertIn("Queued jobs:", text)
-            self.assertIn("Requestable resources:", text)
             self.assertIn("Live TPU VMs:", text)
-            self.assertIn("v6-8", text)
-            self.assertIn("v6e-8", text)
+            self.assertNotIn("Requestable resources:", text)
+            self.assertNotIn("Shared interactive TPUs:", text)
+
+    def test_list_hides_terminal_jobs_unless_requested(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            config_path = write_config_file(root)
+            config = load_config(config_path)
+            state_dir = root / "state"
+            backend = DryRunBackend(str(state_dir))
+            write_job(backend, config.primary_bucket, make_spec("job-pending"))
+            failed_dir = write_job(backend, config.primary_bucket, make_spec("job-failed"))
+            failed_state = JobState.new()
+            failed_state.status = JobStatus.FAILED
+            backend.write_gcs(f"{failed_dir}/status.json", json.dumps(failed_state.to_dict()))
+
+            parser = build_parser()
+            args = parser.parse_args(
+                [
+                    "--config",
+                    str(config_path),
+                    "--dry-run",
+                    "--base-dir",
+                    str(state_dir),
+                    "list",
+                    "--jobs",
+                    "v6",
+                ]
+            )
+            out = io.StringIO()
+            with redirect_stdout(out):
+                args.func(args)
+            text = out.getvalue()
+            self.assertIn("job-pending", text)
+            self.assertNotIn("job-failed", text)
+
+            args_all = parser.parse_args(
+                [
+                    "--config",
+                    str(config_path),
+                    "--dry-run",
+                    "--base-dir",
+                    str(state_dir),
+                    "list",
+                    "--jobs",
+                    "--all",
+                    "v6",
+                ]
+            )
+            out_all = io.StringIO()
+            with redirect_stdout(out_all):
+                args_all.func(args_all)
+            self.assertIn("job-failed", out_all.getvalue())
 
     def test_list_jobs_can_still_show_empty_job_list(self) -> None:
         with tempfile.TemporaryDirectory() as d:

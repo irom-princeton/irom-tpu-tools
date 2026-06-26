@@ -70,6 +70,7 @@ List and inspect:
 tpu list
 tpu list v6
 tpu list --jobs v6 --active
+tpu list --jobs v6 --all
 tpu list --resources v4
 tpu list --live v4
 tpu status <job_id_or_name>
@@ -77,9 +78,10 @@ tpu logs <job_id_or_name> --lines 200
 tpu tail <job_id_or_name> --follow
 ```
 
-By default, `tpu list [v4|v5|v6]` shows an overview: queued jobs, requestable
-resource sizes, shared interactive TPUs, and live TPU VMs visible to the current
-account. Use `--jobs`, `--resources`, or `--live` for a strict single view.
+By default, `tpu list [v4|v5|v6]` shows active queued jobs and live TPU VMs
+visible to the current account. Canceled, failed, and succeeded job records are
+hidden from the default list; use `--all` or `--status FAILED` when you need job
+history. Use `--jobs`, `--resources`, or `--live` for a strict single view.
 Live TPU status is shown as `STATE/HEALTH`, for example `READY/HEALTHY` or
 `READY/UNHEALTHY_MAINTENANCE`, so a ready-but-unhealthy TPU is not mistaken for
 usable capacity.

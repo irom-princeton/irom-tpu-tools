@@ -245,10 +245,13 @@ def cmd_list(args: argparse.Namespace) -> int:
         if getattr(args, "jobs", False)
         else "auto"
     )
-    job_only_filters = bool(args.user or args.active or args.status)
+    include_all = bool(getattr(args, "all", False))
+    job_only_filters = bool(args.user or args.active or args.status or include_all)
+    if args.active and include_all:
+        raise SystemExit("--active and --all cannot be used together")
     if mode == "resources":
         if job_only_filters:
-            raise SystemExit("--user, --active, and --status only apply to --jobs")
+            raise SystemExit("--user, --active, --all, and --status only apply to --jobs")
         return _print_resource_catalog(config, version=args.version)
 
     entries = _load_scheduler_state(backend, config)
@@ -260,9 +263,11 @@ def cmd_list(args: argparse.Namespace) -> int:
             continue
         if args.user and spec.submitted_by != args.user:
             continue
-        if args.active and state.status in TERMINAL_STATUSES:
-            continue
         if args.status and state.status.value != args.status.upper():
+            continue
+        if state.status in TERMINAL_STATUSES and not (include_all or args.status):
+            continue
+        if args.active and state.status in TERMINAL_STATUSES:
             continue
         status = state.current_qr_state if state.current_qr_state else state.status.value
         rows.append(
@@ -280,7 +285,7 @@ def cmd_list(args: argparse.Namespace) -> int:
     rows.sort(key=lambda row: (row[2] in {"SUCCEEDED", "FAILED", "CANCELED"}, row[-1], row[0]))
     if mode == "live":
         if job_only_filters:
-            raise SystemExit("--user, --active, and --status only apply to --jobs")
+            raise SystemExit("--user, --active, --all, and --status only apply to --jobs")
         return _print_live_tpus(config, backend, version=args.version)
     if mode == "auto" and not job_only_filters:
         print("Queued jobs:")
@@ -288,9 +293,6 @@ def cmd_list(args: argparse.Namespace) -> int:
             ["JOB ID", "NAME", "STATUS", "ATT", "RESOURCE", "CHIPS", "USER", "SUBMITTED"],
             rows,
         )
-        print()
-        print("Requestable resources:")
-        _print_resource_catalog(config, version=args.version)
         print()
         print("Live TPU VMs:")
         return _print_live_tpus(config, backend, version=args.version)
@@ -1052,8 +1054,8 @@ def build_parser() -> argparse.ArgumentParser:
         "list",
         help="List queued jobs or requestable TPU resources",
         description=(
-            "Show a TPU overview by default: queued jobs, requestable resources, "
-            "shared interactive TPUs, and live TPU VMs visible to this account. "
+            "Show active queued jobs and live TPU VMs visible to this account by default. "
+            "Terminal job history is hidden unless --all or --status is used. "
             "Use --jobs, --resources, or --live for a strict single view."
         ),
     )
@@ -1064,6 +1066,7 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument("--live", action="store_true", help="Only show live TPU VMs")
     list_p.add_argument("--user")
     list_p.add_argument("--active", "-a", action="store_true")
+    list_p.add_argument("--all", action="store_true", help="Include terminal job history")
     list_p.add_argument("--status")
     list_p.set_defaults(func=cmd_list)
 
@@ -1198,6 +1201,7 @@ def build_parser() -> argparse.ArgumentParser:
     jobs = admin_sub.add_parser("jobs", help="List queue jobs across users")
     jobs.add_argument("--user")
     jobs.add_argument("--active", "-a", action="store_true")
+    jobs.add_argument("--all", action="store_true", help="Include terminal job history")
     jobs.add_argument("--status")
     jobs.set_defaults(func=cmd_admin_jobs)
     qrs = admin_sub.add_parser("qrs", help="List queue-owned queued resources")
