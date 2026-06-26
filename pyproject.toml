@@ -1,7 +1,7 @@
 [project]
 name = "irom-tpu-tools"
 version = "0.1.0"
-description = "Unified TPU utils and watch runner for v4/v5/v6"
+description = "Queue-backed TPU scheduling and central admin tools for v4/v5/v6"
 readme = "README.md"
 requires-python = ">=3.8,<3.14"
 license = { text = "Apache-2.0" }
@@ -12,6 +12,7 @@ authors = [
 
 dependencies = [
   "rich>=10.0.0",
+  "PyYAML>=6.0",
 ]
 
 [project.scripts]

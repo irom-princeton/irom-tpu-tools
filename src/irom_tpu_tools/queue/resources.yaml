@@ -1,0 +1,194 @@
+# Default IROM TPU queue configuration.
+#
+# Normal users only need write/read access to these queue prefixes. The
+# scheduler service account needs TPU Admin, Service Account User for the TPU
+# worker service accounts, Secret Manager access, and read/write access here.
+
+quota_groups:
+  v4:
+    total_chips: 32
+  v5:
+    total_chips: 64
+  v6:
+    total_chips: 64
+
+resources:
+  v4-4:
+    version: v4
+    accelerator_type: v4-4
+    runtime_version: tpu-ubuntu2204-base
+    zone: us-central2-b
+    project: mae-irom-lab-guided-data
+    chips: 4
+    workers: 1
+    spot: true
+    enabled: true
+    quota_group: v4
+    service_account: tpu-sa-us-central2@mae-irom-lab-guided-data.iam.gserviceaccount.com
+  v4-8:
+    version: v4
+    accelerator_type: v4-8
+    runtime_version: tpu-ubuntu2204-base
+    zone: us-central2-b
+    project: mae-irom-lab-guided-data
+    chips: 8
+    workers: 1
+    spot: true
+    enabled: true
+    quota_group: v4
+    service_account: tpu-sa-us-central2@mae-irom-lab-guided-data.iam.gserviceaccount.com
+  v4-16:
+    version: v4
+    accelerator_type: v4-16
+    runtime_version: tpu-ubuntu2204-base
+    zone: us-central2-b
+    project: mae-irom-lab-guided-data
+    chips: 16
+    workers: 2
+    spot: true
+    enabled: true
+    quota_group: v4
+    service_account: tpu-sa-us-central2@mae-irom-lab-guided-data.iam.gserviceaccount.com
+  v4-32:
+    version: v4
+    accelerator_type: v4-32
+    runtime_version: tpu-ubuntu2204-base
+    zone: us-central2-b
+    project: mae-irom-lab-guided-data
+    chips: 32
+    workers: 4
+    spot: true
+    enabled: true
+    quota_group: v4
+    service_account: tpu-sa-us-central2@mae-irom-lab-guided-data.iam.gserviceaccount.com
+  v5-8:
+    version: v5
+    accelerator_type: v5litepod-8
+    runtime_version: v2-alpha-tpuv5-lite
+    zone: us-central1-a
+    project: mae-irom-lab-guided-data
+    chips: 8
+    workers: 1
+    spot: true
+    enabled: true
+    quota_group: v5
+    service_account: tpu-sa-us-central1@mae-irom-lab-guided-data.iam.gserviceaccount.com
+  v5-16:
+    version: v5
+    accelerator_type: v5litepod-16
+    runtime_version: v2-alpha-tpuv5-lite
+    zone: us-central1-a
+    project: mae-irom-lab-guided-data
+    chips: 16
+    workers: 2
+    spot: true
+    enabled: true
+    quota_group: v5
+    service_account: tpu-sa-us-central1@mae-irom-lab-guided-data.iam.gserviceaccount.com
+  v5-32:
+    version: v5
+    accelerator_type: v5litepod-32
+    runtime_version: v2-alpha-tpuv5-lite
+    zone: us-central1-a
+    project: mae-irom-lab-guided-data
+    chips: 32
+    workers: 4
+    spot: true
+    enabled: true
+    quota_group: v5
+    service_account: tpu-sa-us-central1@mae-irom-lab-guided-data.iam.gserviceaccount.com
+  v5-64:
+    version: v5
+    accelerator_type: v5litepod-64
+    runtime_version: v2-alpha-tpuv5-lite
+    zone: us-central1-a
+    project: mae-irom-lab-guided-data
+    chips: 64
+    workers: 8
+    spot: true
+    enabled: true
+    quota_group: v5
+    service_account: tpu-sa-us-central1@mae-irom-lab-guided-data.iam.gserviceaccount.com
+  v6-8:
+    version: v6
+    accelerator_type: v6e-8
+    runtime_version: v2-alpha-tpuv6e
+    zone: us-east1-d
+    project: mae-irom-lab-guided-data
+    chips: 8
+    workers: 1
+    spot: true
+    enabled: true
+    quota_group: v6
+    service_account: tpu-sa-us-east1@mae-irom-lab-guided-data.iam.gserviceaccount.com
+  v6-16:
+    version: v6
+    accelerator_type: v6e-16
+    runtime_version: v2-alpha-tpuv6e
+    zone: us-east1-d
+    project: mae-irom-lab-guided-data
+    chips: 16
+    workers: 2
+    spot: true
+    enabled: true
+    quota_group: v6
+    service_account: tpu-sa-us-east1@mae-irom-lab-guided-data.iam.gserviceaccount.com
+  v6-32:
+    version: v6
+    accelerator_type: v6e-32
+    runtime_version: v2-alpha-tpuv6e
+    zone: us-east1-d
+    project: mae-irom-lab-guided-data
+    chips: 32
+    workers: 4
+    spot: true
+    enabled: true
+    quota_group: v6
+    service_account: tpu-sa-us-east1@mae-irom-lab-guided-data.iam.gserviceaccount.com
+  v6-64:
+    version: v6
+    accelerator_type: v6e-64
+    runtime_version: v2-alpha-tpuv6e
+    zone: us-east1-d
+    project: mae-irom-lab-guided-data
+    chips: 64
+    workers: 8
+    spot: true
+    enabled: true
+    quota_group: v6
+    service_account: tpu-sa-us-east1@mae-irom-lab-guided-data.iam.gserviceaccount.com
+  v6-128:
+    version: v6
+    accelerator_type: v6e-128
+    runtime_version: v2-alpha-tpuv6e
+    zone: us-east1-d
+    project: mae-irom-lab-guided-data
+    chips: 128
+    workers: 16
+    spot: true
+    enabled: false
+    quota_group: v6
+    service_account: tpu-sa-us-east1@mae-irom-lab-guided-data.iam.gserviceaccount.com
+
+buckets:
+  us-central2: gs://pi0-cot/tpu-job-queue
+  us-central1: gs://v5_central1_a/tpu-job-queue
+  us-east1: gs://v6_east1d/tpu-job-queue
+
+primary_bucket_region: us-central2
+
+scheduler:
+  scan_interval_seconds: 30
+  active_no_claim_timeout_seconds: 1800
+  heartbeat_timeout_seconds: 600
+  status_write_interval_seconds: 60
+  job_retention_days: 30
+  qr_prefix: iq
+  qr_label_workaround: false
+
+user_limits:
+  default_max_chips: 64
+  users: {}
+
+secrets:
+  WANDB_API_KEY: wandb-api-key

@@ -1,23 +1,7 @@
-"""Unified TPU utilities for v4/v5/v6 with a single CLI.
+"""Queue-backed TPU scheduling tools for IROM."""
 
-This package provides:
-- gcloud TPU VM wrappers with robust SSH flags and timeouts
-- tmux helpers (launch, attach, ls, kill)
-- admin helpers (kill JAX, clean tmp, nuke)
-- list/delete helpers
-- a unified watch-and-run launcher for v4/v5/v6
-"""
+from .queue import QueueConfig, Scheduler, load_config
 
-from .config import TPUEnvConfig
-from .ssh import SSHOptions
-from .tpu import TPUManager
-from .tpu import resolve_tpu
-
-__all__ = [
-    "SSHOptions",
-    "TPUEnvConfig",
-    "TPUManager",
-    "resolve_tpu",
-]
+__all__ = ["QueueConfig", "Scheduler", "load_config"]
 
 PROJECT_NAME = "irom-tpu-tools"

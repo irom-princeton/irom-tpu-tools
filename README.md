@@ -1,174 +1,153 @@
 # irom-tpu-tools
 
-Unified TPU utilities and background watcher for any repo across **v4 / v5 / v6**.
+Queue-backed TPU scheduling for IROM. This branch intentionally removes the
+old local watcher workflow from the default CLI. Normal users submit jobs to a
+central GCS queue; a central scheduler service account creates/deletes queued
+resources and TPU VMs.
+
+## Why This Branch Exists
+
+The old workflow let every user run TPU Admin operations from their own shell.
+That made IAM broad and cleanup decentralized. The new split is:
+
+- Users: package code, submit job specs, read status/logs, request cancel/retry.
+- Scheduler: creates queued resources, handles preemption, retries attempts,
+  cleans up TPU VMs and QRs.
+- Admins: inspect quotas, all jobs, queue-owned QRs, and delete orphan/idle
+  queue resources.
+
+Normal job lifecycle state no longer lives in `~/.tpu-jobs`. It lives in GCS:
+
+```text
+gs://.../tpu-job-queue/
+  scheduler_state.json
+  jobs/<job_id>/
+    spec.json
+    status.json
+    code.tar.gz
+    canceled
+    retry
+    running
+    succeeded
+    failed
+    attempts/attempt-1/claimed
+    attempts/attempt-1/heartbeat
+    logs/attempt-1/worker-0.log
+```
 
 ## Installation
 
-First, set up the Google Cloud CLI by following the [official installation guide](https://docs.cloud.google.com/sdk/docs/install-sdk).
-
 ```bash
-git clone https://github.com/irom-princeton/irom-tpu-tools.git
-pipx install ./irom-tpu-tools
-
-# Ensure ~/.local/bin is on PATH
+pipx install --force /home/lzha/code/irom-tpu-tools
 export PATH="$HOME/.local/bin:$PATH"
-
-# set up tab-completion for tpu name (optional)
-tpu install-completion
-source ~/.bashrc
-
-# Verify
-tpu --help 
-tpu --commands # command cheat sheet
+tpu --help
 ```
 
-When you make local changes to any file in the package, run `pipx install --force ./irom-tpu-tools` for it to take effect.
-
----
-
-## Environment Setup
-
-Export the following variables (e.g. in your `~/.bashrc` or `~/.zshrc`):
+Optional custom config:
 
 ```bash
-export TPU_PROJECT=mae-irom-lab-guided-data          # ask your project admin
-export TPU_ZONE_v4=us-central2-b
-export TPU_ZONE_v5=us-central1-a
-export TPU_ZONE_v6=us-east1-d
-export TPU_BUCKET_v4=gs://pi0-cot
-export TPU_BUCKET_v5=gs://v5_central1_a
-export TPU_BUCKET_v6=gs://v6_east1d
-export WANDB_API_KEY=<your_wandb_api_key>
-export GH_TOKEN=<your_github_personal_access_token>  # needs repo read access
-
-# Optional — used as defaults when `tpu create --repo` is omitted.
-export TPU_NAME=<default_tpu_name>                   # optional fallback when --name is omitted. Format: <tpu_type>-<num_tpus>-<index>-<your_name> (e.g. v6-64-01-lihan)
-export GH_REPO_NAME=<github_repo_name>               # repo to clone on the TPU
-export GH_OWNER=<your_github_username>               # owner of the repo/fork
+export TPU_QUEUE_CONFIG=/path/to/resources.yaml
 ```
 
-`GH_OWNER` / `GH_TOKEN` are used to clone via HTTPS (`https://<token>@github.com/<owner>/<repo>`), so this works with your own fork — you do **not** need to be the upstream repo owner.
+The packaged default config is
+`src/irom_tpu_tools/queue/resources.yaml`.
 
-After this, you need to run `gcloud alpha compute tpus tpu-vm` to initialize. You will be prompted with some questions from google CLI, and answer yes.
+## User Commands
 
----
-
-## Quickstart
-
-### Monitoring Status
+Submit a job:
 
 ```bash
-tpu list                 # check all running tpu jobs
-tpu status               # check all tpu jobs managed by you
+tpu create v6 -n 32 --name train-openpi \
+  --code-dir /home/lzha/code/ego-lap \
+  --setup-cmd "uv sync --group tpu && uv pip install -e ." \
+  --env WANDB_PROJECT=openpi \
+  -- python scripts/train.py --config-name=my_config
 ```
 
-### Creating a TPU instance
-
-Different options for creating a tpu instance. Note, `my-tpu` should follow the format of <tpu_type>-<num_tpus>-<index>-<your_name> (e.g. v6-64-01-lihan).
-```bash
-# create bare tpu instance
-tpu create v6 --name my-tpu -n 8
-
-# create tpu instance with cloned repo and custom setup command
-tpu create v6 --name my-tpu -n 8 --repo usrname/reponame  --branch main --setup-cmd "..."  
-
-# create tpu instance with repo, setup, and command that will relaunch after preemption
-tpu create v6 --name my-tpu -n 8 --repo usrname/reponame  --branch main --setup-cmd "..." \
-  -- XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 uv run --group tpu scripts/train.py --config my_config 
-```
-
-To access your instance after creation
-```bash
-tpu ssh my-tpu                      # interactive SSH shell on worker 0 (no tmux)
-tpu attach my-tpu                   # attach to the training tmux session on worker 0 (Ctrl-B+D to exit)
-tpu tail my-tpu                     # read final lines of output
-tpu info my-tpu                     # get information about the tpu
-tpu logs my-tpu                     # show last 50 lines of the watcher log
-```
-
-### Re-running an existing job
-
-If you want to relaunch the same setup + command on a managed TPU (e.g. after manually killing training, or to restart on a still-allocated TPU), use `rerun`. It loads the saved config and reuses the `tpu create` flow:
+List and inspect:
 
 ```bash
-tpu rerun my-tpu        # prompts before relaunching on a READY TPU
-tpu rerun my-tpu -f     # skip prompt
+tpu list
+tpu list v6 --active
+tpu status <job_id_or_name>
+tpu logs <job_id_or_name> --lines 200
+tpu tail <job_id_or_name> --follow
 ```
 
-`tpu info my-tpu` shows what will be re-run (repo, branch, setup, command).
+Cancel or retry:
 
-### Deleting a TPU instance
+```bash
+tpu delete <job_id_or_name>
+tpu retry <job_id_or_name>
+tpu rerun <job_id_or_name>
 ```
-# stop watcher + delete TPU (releases allocation)
-tpu delete my-tpu
+
+`tpu delete` writes a cancellation sentinel. The scheduler performs the actual
+TPU VM and queued-resource cleanup.
+
+## Scheduler
+
+The scheduler must run under an identity with TPU Admin permissions:
+
+```bash
+tpu scheduler --scan-interval 30
 ```
 
----
+For local validation without GCP:
 
-## Full List of Commands
-
-### 📋 Monitoring
-
-| Command | Description |
-|---|---|
-| `tpu list` | List all TPUs across all zones (includes watcher status) |
-| `tpu list v6` | List TPUs in a specific zone |
-| `tpu status` | Show status of all managed jobs (watcher, preemptions, running since) |
-| `tpu status NAME` | Show status of a single job |
-| `tpu logs NAME` | Show last 50 lines of the watcher log |
-| `tpu logs NAME -f` | Follow the watcher log in real time |
-| `tpu logs NAME -n 500` | Show last N lines |
-
-The status/list tables include:
-- `STATE` — current TPU state (READY / PREEMPTED / STOPPED / ...)
-- `WATCHER` — whether the background daemon is alive
-- `RUNNING SINCE` — when the TPU most recently became READY
-- `#PREEMPTIONS` — total preemptions observed by the watcher
-- `LAST PREEMPTED` — timestamp of the most recent preemption
-
-### 🔗 Connect
-
-| Command | Description |
-|---|---|
-| `tpu ssh NAME` | Open interactive SSH shell on worker 0 (no tmux) |
-| `tpu ssh NAME --worker 1` | Open interactive SSH shell on a specific worker |
-| `tpu attach NAME` | Attach to tmux session on worker 0 |
-| `tpu attach NAME --worker 1` | Attach on a specific worker |
-| `tpu tail NAME` | Tail last 50 lines of the latest tmux log on worker 0 |
-| `tpu tail NAME --worker 1` | Tail on a specific worker |
-| `tpu tmux NAME --session s -- <cmd>` | Run a command in a new/named tmux session on all workers |
-
-### 🧹 Cleanup
-
-| Command | Description |
-|---|---|
-| `tpu nuke NAME` | Kill tmux + JAX processes + clean tmp (full reset) |
-| `tpu clean NAME` | Truncate system logs to free disk |
-
-### 🔧 Advanced
-
-| Command | Description |
-|---|---|
-| `tpu v4 -- <cmd>` | Run a raw SSH command on all v4 workers (no tmux) |
-| `tpu v4 --worker 0 -- <cmd>` | Run a raw command on a specific worker |
-| `tpu v4 setup` | Re-run the setup step (clone + install) on v4 workers |
-
-Replace `v4` with `v5` or `v6` as needed.
-
----
-
-## Package Structure
-
+```bash
+tpu --dry-run --base-dir /tmp/irom-tpu-queue scheduler --once
 ```
-irom-tpu-tools/
-  pyproject.toml      # Console scripts: tpu, tpu-tools
-  src/irom_tpu_tools/
-    cli.py            # CLI dispatcher
-    config.py         # Env var loader
-    jobs.py           # Persistent job state in ~/.tpu-jobs/
-    tpu.py            # TPU lifecycle helpers (create/list/delete/tmux/kill/nuke)
-    watch.py          # Watcher daemon
-    __init__.py
-  README.md
-  LICENSE
+
+The scheduler loop:
+
+1. Scans regional queue buckets for jobs.
+2. Handles cancel/retry/completion sentinels.
+3. Polls queue-owned QRs.
+4. Requeues preempted/suspended/failed attempts until `max_attempts`.
+5. Enforces quota groups and per-user chip limits.
+6. Deletes terminal or orphaned queue-owned resources.
+7. Writes `scheduler_state.json` for fast CLI listing.
+
+## Admin Commands
+
+These commands are intended for the central admin account:
+
+```bash
+tpu admin resources
+tpu admin qrs
+tpu admin cleanup --idle-minutes 30
+tpu admin cleanup --idle-minutes 30 --yes
+```
+
+Cleanup is dry-run by default. It only targets queue-owned resources whose names
+start with the configured `qr_prefix`.
+
+## IAM Model
+
+Normal users need:
+
+- `storage.objects.create/get/list` on queue prefixes.
+- Read access to their logs/status.
+- No TPU Admin role.
+
+Scheduler/admin identity needs:
+
+- TPU Admin on the TPU project.
+- Service Account User for TPU worker service accounts.
+- Secret Manager access for configured worker secrets.
+- Read/write/delete access to queue buckets.
+
+TPU worker service accounts need:
+
+- Read access to queued code archives.
+- Write access to job logs/sentinels.
+- Dataset/checkpoint bucket permissions required by the training code.
+- Secret Manager access for configured secrets, such as `WANDB_API_KEY`.
+
+## Development Validation
+
+```bash
+python3 -m compileall src tests
+PYTHONPATH=src python3 -m unittest discover -s tests
 ```
