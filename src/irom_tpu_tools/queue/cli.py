@@ -6,6 +6,8 @@ import json
 import logging
 import os
 from pathlib import Path
+import re
+import subprocess
 import sys
 import tempfile
 import time
@@ -513,6 +515,14 @@ def _short_name(value: Any) -> str:
     return str(value or "-").rsplit("/", 1)[-1]
 
 
+def _status_with_health(vm: dict[str, Any]) -> str:
+    state = str(vm.get("state") or "-")
+    health = str(vm.get("health") or "").strip()
+    if health and health != "-":
+        return f"{state}/{health}"
+    return state
+
+
 def _infer_tpu_version(
     config: QueueConfig,
     *,
@@ -547,10 +557,10 @@ def _live_inventory_targets(
     return sorted(targets)
 
 
-def _print_live_tpus(
+def _collect_live_tpus(
     config: QueueConfig, backend: Backend, *, version: str | None = None
-) -> int:
-    rows = []
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()
     for project, zone in _live_inventory_targets(config, version=version):
         for vm in backend.list_tpu_vms(project, zone):
@@ -561,23 +571,197 @@ def _print_live_tpus(
             seen.add(key)
             accelerator = _short_name(vm.get("acceleratorType"))
             rows.append(
-                [
-                    name,
-                    _infer_tpu_version(
+                {
+                    "name": name,
+                    "version": _infer_tpu_version(
                         config,
                         zone=zone,
                         accelerator_type=accelerator,
                         requested_version=version,
                     ),
-                    accelerator,
-                    zone,
-                    str(vm.get("state") or "-"),
-                    str(vm.get("health") or "-"),
-                    str(vm.get("createTime") or "-")[:19],
-                ]
+                    "accelerator": accelerator,
+                    "zone": zone,
+                    "project": project,
+                    "status": _status_with_health(vm),
+                    "created": str(vm.get("createTime") or "-")[:19],
+                }
             )
-    rows.sort(key=lambda row: (row[1], row[3], row[0]))
-    _print_table(["NAME", "VERSION", "ACCEL", "ZONE", "STATE", "HEALTH", "CREATED"], rows)
+    rows.sort(key=lambda row: (row["version"], row["zone"], row["name"]))
+    return rows
+
+
+def _print_live_tpus(
+    config: QueueConfig, backend: Backend, *, version: str | None = None
+) -> int:
+    rows = [
+        [
+            row["name"],
+            row["version"],
+            row["accelerator"],
+            row["zone"],
+            row["status"],
+            row["created"],
+        ]
+        for row in _collect_live_tpus(config, backend, version=version)
+    ]
+    _print_table(["NAME", "VERSION", "ACCEL", "ZONE", "STATUS", "CREATED"], rows)
+    return 0
+
+
+def _infer_version_from_name(name: str) -> str | None:
+    match = re.match(r"^(v[456])-", name)
+    return match.group(1) if match else None
+
+
+def _default_project_zone_for_name(
+    config: QueueConfig, *, name: str, version: str | None
+) -> tuple[str, str] | None:
+    inferred = version or _infer_version_from_name(name)
+    candidates = [
+        r
+        for r in sorted(config.resources.values(), key=lambda item: item.name)
+        if inferred is None or r.version == inferred
+    ]
+    if candidates:
+        return candidates[0].project, candidates[0].zone
+    if config.resources:
+        resource = next(iter(config.resources.values()))
+        return resource.project, resource.zone
+    return None
+
+
+def _redact_command(value: str) -> str:
+    redacted = re.sub(r"(WANDB_API_KEY|GH_TOKEN|GITHUB_TOKEN)=[^ ]+", r"\1=REDACTED", value)
+    redacted = re.sub(r"ghp_[A-Za-z0-9_]+", "ghp_REDACTED", redacted)
+    redacted = re.sub(r"wandb_[A-Za-z0-9_]+", "wandb_REDACTED", redacted)
+    return redacted
+
+
+def _local_watchers() -> dict[str, list[list[str]]]:
+    proc = subprocess.run(
+        ["ps", "-u", os.environ.get("USER", ""), "-o", "pid=,ppid=,stat=,etime=,cmd="],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    watchers: dict[str, list[list[str]]] = {}
+    for line in proc.stdout.splitlines():
+        if "tpu watch" not in line:
+            continue
+        parts = line.strip().split(None, 4)
+        if len(parts) < 5:
+            continue
+        pid, ppid, stat, elapsed, cmd = parts
+        match = re.search(r"TPU_NAME=([A-Za-z0-9_.-]+)", cmd)
+        if not match:
+            match = re.search(r"\b(v[456]-[A-Za-z0-9_.-]+)\b", cmd)
+        name = match.group(1) if match else "-"
+        watchers.setdefault(name, []).append(
+            [pid, ppid, stat, elapsed, _redact_command(cmd)]
+        )
+    return watchers
+
+
+def _activity_remote_command() -> str:
+    return r"""bash -lc 'set +e
+echo "tmux:"
+tmux ls 2>/dev/null || true
+echo "processes:"
+ps -u "$USER" -o pid,ppid,stat,etime,%cpu,%mem,cmd \
+  | grep -E "python|uv run|tpu_run|train|jax|torch|bash scripts" \
+  | grep -v grep \
+  | head -n 80 || true
+echo "logs:"
+for d in "$HOME/ego-lap/logs" "$HOME"/worktrees/ego-lap/*/logs "$HOME"/deployed_code/*/logs; do
+  if [ -d "$d" ]; then
+    echo "DIR=$d"
+    ls -lt "$d" | sed -n "1,8p"
+  fi
+done'"""
+
+
+def cmd_admin_activity(args: argparse.Namespace) -> int:
+    config = _load_config(args)
+    backend = _backend(args)
+    live_rows = _collect_live_tpus(config, backend, version=args.version)
+    live_by_name = {row["name"]: row for row in live_rows}
+    requested = list(args.tpus or [])
+    targets = requested or [row["name"] for row in live_rows]
+    if args.version:
+        targets = [
+            name
+            for name in targets
+            if live_by_name.get(name, {}).get("version") == args.version
+            or _infer_version_from_name(name) == args.version
+        ]
+
+    watchers = _local_watchers()
+    if watchers:
+        print("Local old watcher processes:")
+        watcher_rows = []
+        for name, rows in sorted(watchers.items()):
+            for pid, ppid, stat, elapsed, cmd in rows:
+                if targets and name not in targets:
+                    continue
+                watcher_rows.append([name, pid, ppid, stat, elapsed, cmd])
+        _print_table(["TPU", "PID", "PPID", "STAT", "ELAPSED", "COMMAND"], watcher_rows)
+        print()
+
+    if not targets:
+        print("No matching TPU VMs found.")
+        return 0
+
+    for name in targets:
+        live = live_by_name.get(name)
+        if live:
+            project = live["project"]
+            zone = live["zone"]
+            status = live["status"]
+            accelerator = live["accelerator"]
+        else:
+            location = _default_project_zone_for_name(
+                config, name=name, version=args.version
+            )
+            project, zone = location if location else ("-", "-")
+            status = "NOT_FOUND"
+            accelerator = "-"
+        print(f"## {name}")
+        print(f"Project: {project}")
+        print(f"Zone:    {zone}")
+        print(f"Accel:   {accelerator}")
+        print(f"Status:  {status}")
+        if watchers.get(name):
+            print("Local watchers:")
+            _print_table(
+                ["PID", "PPID", "STAT", "ELAPSED", "COMMAND"],
+                watchers[name],
+            )
+        else:
+            print("Local watchers: (none)")
+
+        if args.no_ssh:
+            print()
+            continue
+        if not live or "/" not in status or not status.startswith("READY/"):
+            print("Remote worker activity: skipped; TPU is not READY with reported health.")
+            print()
+            continue
+        result = backend.ssh_tpu_vm(
+            name,
+            project,
+            zone,
+            args.worker,
+            _activity_remote_command(),
+        )
+        if result.returncode != 0:
+            print("Remote worker activity: unavailable")
+            message = (result.stderr or result.stdout or "").strip()
+            if message:
+                print(_redact_command(message))
+        else:
+            print(f"Remote worker {args.worker} activity:")
+            print(_redact_command(result.stdout).rstrip() or "(no output)")
+        print()
     return 0
 
 
@@ -1018,6 +1202,19 @@ def build_parser() -> argparse.ArgumentParser:
     jobs.set_defaults(func=cmd_admin_jobs)
     qrs = admin_sub.add_parser("qrs", help="List queue-owned queued resources")
     qrs.set_defaults(func=cmd_admin_qrs)
+    activity = admin_sub.add_parser(
+        "activity",
+        help="Show read-only live TPU activity",
+        description=(
+            "Admin read-only activity view: live state/health, local old watcher "
+            "processes, and worker tmux/python commands via SSH."
+        ),
+    )
+    activity.add_argument("tpus", nargs="*", help="Optional TPU VM names")
+    activity.add_argument("--version", choices=["v4", "v5", "v6"])
+    activity.add_argument("--worker", type=int, default=0)
+    activity.add_argument("--no-ssh", action="store_true", help="Skip remote SSH")
+    activity.set_defaults(func=cmd_admin_activity)
     cleanup = admin_sub.add_parser("cleanup", help="Delete queue-owned orphan/idle resources")
     cleanup.add_argument("--idle-minutes", type=int)
     cleanup.add_argument("--yes", action="store_true")

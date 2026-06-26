@@ -80,6 +80,9 @@ tpu tail <job_id_or_name> --follow
 By default, `tpu list [v4|v5|v6]` shows an overview: queued jobs, requestable
 resource sizes, shared interactive TPUs, and live TPU VMs visible to the current
 account. Use `--jobs`, `--resources`, or `--live` for a strict single view.
+Live TPU status is shown as `STATE/HEALTH`, for example `READY/HEALTHY` or
+`READY/UNHEALTHY_MAINTENANCE`, so a ready-but-unhealthy TPU is not mistaken for
+usable capacity.
 
 Cancel or retry:
 
@@ -157,12 +160,21 @@ These commands are intended for the central admin account:
 ```bash
 tpu admin resources
 tpu admin qrs
+tpu admin activity
+tpu admin activity --version v6
+tpu admin activity v6-32-04-lzha v6-32-06-lzha --worker 0
+tpu admin activity --no-ssh v6-32-04-lzha
 tpu admin cleanup --idle-minutes 30
 tpu admin cleanup --idle-minutes 30 --yes
 ```
 
 Cleanup is dry-run by default. It only targets queue-owned resources whose names
 start with the configured `qr_prefix`.
+
+`tpu admin activity` is read-only. It shows live TPU status, matching old local
+`tpu watch` processes, and worker tmux/python commands via SSH when the TPU is
+reachable. Stop old `tpu watch` processes before deleting resources they own;
+otherwise the old watcher may recreate the TPU or queued resource.
 
 ## IAM Model
 

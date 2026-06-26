@@ -60,6 +60,12 @@ class Backend(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def ssh_tpu_vm(
+        self, name: str, project: str, zone: str, worker: int, command: str
+    ) -> subprocess.CompletedProcess[str]:
+        raise NotImplementedError
+
+    @abstractmethod
     def read_gcs(self, url: str) -> str | None:
         raise NotImplementedError
 
@@ -292,6 +298,28 @@ class GCPBackend(Backend):
                 row["name"] = str(row["name"]).rsplit("/", 1)[-1]
         return rows
 
+    def ssh_tpu_vm(
+        self, name: str, project: str, zone: str, worker: int, command: str
+    ) -> subprocess.CompletedProcess[str]:
+        cmd = [
+            "gcloud",
+            "alpha",
+            "compute",
+            "tpus",
+            "tpu-vm",
+            "ssh",
+            name,
+            "--project",
+            project,
+            "--zone",
+            zone,
+            "--worker",
+            str(worker),
+            "--command",
+            command,
+        ]
+        return self._run(cmd, check=False)
+
     def read_gcs(self, url: str) -> str | None:
         result = self._run(["gsutil", "cat", url], check=False)
         if result.returncode != 0:
@@ -501,6 +529,23 @@ class DryRunBackend(Backend):
                     }
                 )
         return rows
+
+    def ssh_tpu_vm(
+        self, name: str, project: str, zone: str, worker: int, command: str
+    ) -> subprocess.CompletedProcess[str]:
+        if not any(
+            qr.name == name and qr.project == project and qr.zone == zone
+            for qr in self.queued_resources.values()
+        ):
+            return subprocess.CompletedProcess(
+                ["dry-run-ssh", name], 1, "", f"TPU VM not found: {name}"
+            )
+        return subprocess.CompletedProcess(
+            ["dry-run-ssh", name],
+            0,
+            "tmux:\n(none)\nprocesses:\n(none)\nlogs:\n(none)\n",
+            "",
+        )
 
     def read_gcs(self, url: str) -> str | None:
         path = self._gcs_path(url)

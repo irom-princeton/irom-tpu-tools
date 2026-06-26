@@ -304,7 +304,48 @@ class SchedulerTests(unittest.TestCase):
             text = out.getvalue()
             self.assertIn("iqtest-live", text)
             self.assertIn("v6e-8", text)
-            self.assertIn("READY", text)
+            self.assertIn("READY/HEALTHY", text)
+
+    def test_admin_activity_reports_live_status_without_ssh(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            config_path = write_config_file(root)
+            state_dir = root / "state"
+            backend = DryRunBackend(str(state_dir))
+            backend.create_queued_resource(
+                name="iqtest-live",
+                node_id="iqtest-live",
+                project="test-project",
+                zone="us-east1-d",
+                accelerator_type="v6e-8",
+                runtime_version="v2-alpha-tpuv6e",
+                spot=True,
+                startup_script_path="",
+                service_account=None,
+            )
+            backend.force_active("iqtest-live")
+
+            parser = build_parser()
+            args = parser.parse_args(
+                [
+                    "--config",
+                    str(config_path),
+                    "--dry-run",
+                    "--base-dir",
+                    str(state_dir),
+                    "admin",
+                    "activity",
+                    "--no-ssh",
+                    "iqtest-live",
+                ]
+            )
+            out = io.StringIO()
+            with redirect_stdout(out):
+                args.func(args)
+            text = out.getvalue()
+            self.assertIn("## iqtest-live", text)
+            self.assertIn("Status:  READY/HEALTHY", text)
+            self.assertIn("Local watchers: (none)", text)
 
 
 if __name__ == "__main__":
