@@ -177,6 +177,16 @@ buckets:
 
 primary_bucket_region: us-central2
 
+interactive_tpus:
+  v4-4-01-interactive:
+    version: v4
+    zone: us-central2-b
+    project: mae-irom-lab-guided-data
+    workers: 1
+    aliases:
+      - v4-interactive
+    description: Shared v4 interactive TPU. Admins may replace this allowlist with current shared TPU names.
+
 scheduler:
   scan_interval_seconds: 30
   active_no_claim_timeout_seconds: 1800

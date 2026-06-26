@@ -85,6 +85,29 @@ tpu rerun <job_id_or_name>
 `tpu delete` writes a cancellation sentinel. The scheduler performs the actual
 TPU VM and queued-resource cleanup.
 
+## Shared Interactive TPUs
+
+Shared v4 interactive TPUs are configured under `interactive_tpus` in
+`resources.yaml`. Users can connect to and move files on these allowlisted TPUs,
+but this command group intentionally has no create/delete/stop/start actions.
+
+```bash
+tpu interactive list
+tpu interactive list --live
+tpu interactive info v4-interactive
+tpu interactive ssh v4-interactive --worker 0
+tpu interactive run v4-interactive -- hostname
+tpu interactive tmux v4-interactive --session debug -- python scratch.py
+tpu interactive attach v4-interactive --session debug
+tpu interactive output v4-interactive --session debug --lines 200
+tpu interactive put v4-interactive ./local.txt ~/local.txt
+tpu interactive get v4-interactive ~/remote.txt ./remote.txt
+```
+
+Interactive commands resolve only configured TPU names or aliases. The packaged
+default includes `v4-4-01-interactive` with alias `v4-interactive`; admins should
+edit that allowlist to match the actual shared v4 TPU inventory.
+
 ## Scheduler
 
 The scheduler must run under an identity with TPU Admin permissions:

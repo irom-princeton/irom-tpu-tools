@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+from contextlib import redirect_stderr
 from datetime import UTC, datetime
+import io
 import json
 from pathlib import Path
 import tempfile
 import unittest
 
 from irom_tpu_tools.queue.backend import DryRunBackend
-from irom_tpu_tools.queue.config import QueueConfig
+from irom_tpu_tools.queue.cli import build_parser
+from irom_tpu_tools.queue.config import QueueConfig, load_config
+from irom_tpu_tools.queue.interactive import resolve_interactive_tpu
 from irom_tpu_tools.queue.scheduler import Scheduler
 from irom_tpu_tools.queue.startup_script import build_startup_script
 from irom_tpu_tools.queue.types import (
@@ -15,6 +19,7 @@ from irom_tpu_tools.queue.types import (
     JobSpec,
     JobState,
     JobStatus,
+    InteractiveTPUConfig,
     QuotaGroupConfig,
     ResourceConfig,
     SchedulerConfig,
@@ -53,6 +58,16 @@ def make_config(tmp: Path, *, user_limit: int | None = None) -> QueueConfig:
         primary_bucket_region="us-east1",
         secrets={"WANDB_API_KEY": "wandb-api-key"},
         user_limits=UserLimitConfig(default_max_chips=user_limit),
+        interactive_tpus={
+            "v4-4-01-interactive": InteractiveTPUConfig(
+                name="v4-4-01-interactive",
+                version="v4",
+                zone="us-central2-b",
+                project="test-project",
+                workers=1,
+                aliases=("v4-interactive",),
+            )
+        },
     )
 
 
@@ -149,6 +164,28 @@ class SchedulerTests(unittest.TestCase):
         self.assertIn("/logs/attempt-$ATTEMPT/worker-$WORKER_ID.log", script)
         self.assertNotIn(".tpu-jobs", script)
         self.assertNotIn("watch.pid", script)
+
+    def test_interactive_tpus_are_allowlisted(self) -> None:
+        config = make_config(Path("/tmp"))
+        tpu = resolve_interactive_tpu(config, "v4-interactive")
+        self.assertEqual(tpu.name, "v4-4-01-interactive")
+        with self.assertRaises(SystemExit):
+            resolve_interactive_tpu(config, "not-allowlisted")
+
+    def test_default_config_has_v4_interactive_entry(self) -> None:
+        config = load_config()
+        self.assertIn("v4-4-01-interactive", config.interactive_tpus)
+        self.assertEqual(config.interactive_tpus["v4-4-01-interactive"].version, "v4")
+
+    def test_interactive_parser_has_no_lifecycle_verbs(self) -> None:
+        parser = build_parser()
+        help_text = parser.format_help()
+        self.assertIn("interactive", help_text)
+        # Do not rely on argparse internals for full traversal; command parsing is
+        # enough to prove lifecycle verbs are not accepted under interactive.
+        for forbidden in ("create", "delete", "stop", "start"):
+            with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()):
+                parser.parse_args(["interactive", forbidden, "v4-interactive"])
 
 
 if __name__ == "__main__":

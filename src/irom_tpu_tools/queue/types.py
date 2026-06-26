@@ -62,6 +62,17 @@ class UserLimitConfig:
         return self.users.get(user, self.default_max_chips)
 
 
+@dataclass(frozen=True)
+class InteractiveTPUConfig:
+    name: str
+    version: str
+    zone: str
+    project: str
+    workers: int = 1
+    description: str = ""
+    aliases: tuple[str, ...] = ()
+
+
 @dataclass
 class SchedulerConfig:
     scan_interval: int = 30

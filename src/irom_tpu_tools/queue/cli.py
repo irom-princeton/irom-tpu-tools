@@ -17,6 +17,7 @@ from .config import (
     load_config,
     resource_for_request,
 )
+from . import interactive as interactive_tools
 from .packaging import compute_checksum, create_code_tarball, generate_job_id
 from .scheduler import Scheduler
 from .types import (
@@ -566,6 +567,141 @@ def cmd_scheduler(args: argparse.Namespace) -> int:
         time.sleep(args.scan_interval or config.scheduler.scan_interval)
 
 
+def _interactive_tpu(args: argparse.Namespace):
+    return interactive_tools.resolve_interactive_tpu(_load_config(args), args.name)
+
+
+def _worker_arg(value: str) -> int | str:
+    return "all" if value == "all" else int(value)
+
+
+def _validate_worker(tpu, worker: int | str) -> None:
+    if worker == "all":
+        return
+    if worker < 0 or worker >= tpu.workers:
+        raise SystemExit(
+            f"Worker {worker} is outside configured range 0..{tpu.workers - 1} for {tpu.name}"
+        )
+
+
+def _command_from_args(parts: list[str]) -> str:
+    command = list(parts or [])
+    if command and command[0] == "--":
+        command = command[1:]
+    if not command:
+        raise SystemExit("No command provided after --")
+    return " ".join(command)
+
+
+def cmd_interactive_list(args: argparse.Namespace) -> int:
+    config = _load_config(args)
+    rows = interactive_tools.list_rows(config, live=args.live)
+    _print_table(
+        ["NAME", "ALIASES", "ZONE", "WORKERS", "ACCEL", "STATE", "HEALTH", "DESCRIPTION"],
+        rows,
+    )
+    return 0
+
+
+def cmd_interactive_info(args: argparse.Namespace) -> int:
+    tpu = _interactive_tpu(args)
+    print(f"Name:        {tpu.name}")
+    print(f"Version:     {tpu.version}")
+    print(f"Project:     {tpu.project}")
+    print(f"Zone:        {tpu.zone}")
+    print(f"Workers:     {tpu.workers}")
+    print(f"Aliases:     {', '.join(tpu.aliases) if tpu.aliases else '-'}")
+    print(f"Description: {tpu.description or '-'}")
+    if args.live:
+        data = interactive_tools.describe_interactive_tpu(tpu)
+        print(f"State:       {data.get('state', 'UNKNOWN')}")
+        print(f"Health:      {data.get('health', '-')}")
+        if data.get("acceleratorType"):
+            print(f"Accelerator: {str(data['acceleratorType']).rsplit('/', 1)[-1]}")
+        if data.get("error"):
+            print(f"Error:       {data['error']}")
+    return 0
+
+
+def cmd_interactive_ssh(args: argparse.Namespace) -> int:
+    tpu = _interactive_tpu(args)
+    _validate_worker(tpu, args.worker)
+    return interactive_tools.ssh_shell(tpu, worker=args.worker)
+
+
+def cmd_interactive_run(args: argparse.Namespace) -> int:
+    tpu = _interactive_tpu(args)
+    worker = _worker_arg(args.worker)
+    _validate_worker(tpu, worker)
+    return interactive_tools.run_command(
+        tpu,
+        command=_command_from_args(args.command),
+        worker=worker,
+    )
+
+
+def cmd_interactive_tmux(args: argparse.Namespace) -> int:
+    tpu = _interactive_tpu(args)
+    worker = _worker_arg(args.worker)
+    _validate_worker(tpu, worker)
+    return interactive_tools.tmux_command(
+        tpu,
+        command=_command_from_args(args.command),
+        session=args.session,
+        worker=worker,
+    )
+
+
+def cmd_interactive_attach(args: argparse.Namespace) -> int:
+    tpu = _interactive_tpu(args)
+    _validate_worker(tpu, args.worker)
+    return interactive_tools.attach_tmux(
+        tpu, session=args.session, worker=args.worker
+    )
+
+
+def cmd_interactive_output(args: argparse.Namespace) -> int:
+    tpu = _interactive_tpu(args)
+    _validate_worker(tpu, args.worker)
+    return interactive_tools.tail_output(
+        tpu,
+        session=args.session,
+        worker=args.worker,
+        lines=args.lines,
+        follow=args.follow,
+    )
+
+
+def cmd_interactive_tmux_ls(args: argparse.Namespace) -> int:
+    tpu = _interactive_tpu(args)
+    _validate_worker(tpu, args.worker)
+    return interactive_tools.tmux_ls(tpu, worker=args.worker)
+
+
+def cmd_interactive_put(args: argparse.Namespace) -> int:
+    tpu = _interactive_tpu(args)
+    _validate_worker(tpu, args.worker)
+    return interactive_tools.scp_to(
+        tpu,
+        local_path=args.local_path,
+        remote_path=args.remote_path,
+        worker=args.worker,
+        recurse=args.recurse,
+    )
+
+
+def cmd_interactive_get(args: argparse.Namespace) -> int:
+    tpu = _interactive_tpu(args)
+    _validate_worker(tpu, args.worker)
+    return interactive_tools.scp_from(
+        tpu,
+        remote_path=args.remote_path,
+        local_path=args.local_path,
+        worker=args.worker,
+        recurse=args.recurse,
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="tpu", description="IROM TPU queue CLI")
     parser.add_argument("--config", help="Queue resources YAML (default: package config)")
@@ -652,6 +788,80 @@ def build_parser() -> argparse.ArgumentParser:
     scheduler.add_argument("--scan-interval", type=int)
     scheduler.add_argument("--verbose", "-v", action="store_true")
     scheduler.set_defaults(func=cmd_scheduler)
+
+    interactive = sub.add_parser(
+        "interactive",
+        help="Use allowlisted shared v4 interactive TPUs",
+        description=(
+            "Connect-only commands for configured shared v4 interactive TPUs. "
+            "This group intentionally has no create/delete/stop/start commands."
+        ),
+    )
+    interactive_sub = interactive.add_subparsers(dest="interactive_cmd")
+    interactive.set_defaults(func=lambda args: (interactive.print_help() or 0))
+
+    ilist = interactive_sub.add_parser("list", help="List allowlisted shared TPUs")
+    ilist.add_argument("--live", action="store_true", help="Also query live TPU state")
+    ilist.set_defaults(func=cmd_interactive_list)
+
+    iinfo = interactive_sub.add_parser("info", help="Show shared TPU config")
+    iinfo.add_argument("name")
+    iinfo.add_argument("--live", action="store_true", help="Also query live TPU state")
+    iinfo.set_defaults(func=cmd_interactive_info)
+
+    issh = interactive_sub.add_parser("ssh", help="Open an interactive shell")
+    issh.add_argument("name")
+    issh.add_argument("--worker", type=int, default=0)
+    issh.set_defaults(func=cmd_interactive_ssh)
+
+    irun = interactive_sub.add_parser("run", help="Run a shell command")
+    irun.add_argument("name")
+    irun.add_argument("--worker", default="0", help="Worker index or 'all'")
+    irun.add_argument("command", nargs=argparse.REMAINDER)
+    irun.set_defaults(func=cmd_interactive_run)
+
+    itmux = interactive_sub.add_parser("tmux", help="Run command in tmux")
+    itmux.add_argument("name")
+    itmux.add_argument("--session", default="tpu")
+    itmux.add_argument("--worker", default="all", help="Worker index or 'all'")
+    itmux.add_argument("command", nargs=argparse.REMAINDER)
+    itmux.set_defaults(func=cmd_interactive_tmux)
+
+    iattach = interactive_sub.add_parser("attach", help="Attach to tmux")
+    iattach.add_argument("name")
+    iattach.add_argument("--session", default="tpu")
+    iattach.add_argument("--worker", type=int, default=0)
+    iattach.set_defaults(func=cmd_interactive_attach)
+
+    for command_name in ("output", "tail"):
+        iout = interactive_sub.add_parser(command_name, help="Read latest tmux log")
+        iout.add_argument("name")
+        iout.add_argument("--session", default="tpu")
+        iout.add_argument("--worker", type=int, default=0)
+        iout.add_argument("--lines", "-n", type=int, default=200)
+        iout.add_argument("--follow", "-f", action="store_true")
+        iout.set_defaults(func=cmd_interactive_output)
+
+    ils = interactive_sub.add_parser("tmux-ls", help="List tmux sessions")
+    ils.add_argument("name")
+    ils.add_argument("--worker", type=int, default=0)
+    ils.set_defaults(func=cmd_interactive_tmux_ls)
+
+    iput = interactive_sub.add_parser("put", help="Copy local file/dir to TPU")
+    iput.add_argument("name")
+    iput.add_argument("local_path")
+    iput.add_argument("remote_path")
+    iput.add_argument("--worker", type=int, default=0)
+    iput.add_argument("--recurse", "-r", action="store_true")
+    iput.set_defaults(func=cmd_interactive_put)
+
+    iget = interactive_sub.add_parser("get", help="Copy TPU file/dir to local path")
+    iget.add_argument("name")
+    iget.add_argument("remote_path")
+    iget.add_argument("local_path")
+    iget.add_argument("--worker", type=int, default=0)
+    iget.add_argument("--recurse", "-r", action="store_true")
+    iget.set_defaults(func=cmd_interactive_get)
 
     admin = sub.add_parser("admin", help="Admin queue/resource commands")
     admin_sub = admin.add_subparsers(dest="admin_cmd")

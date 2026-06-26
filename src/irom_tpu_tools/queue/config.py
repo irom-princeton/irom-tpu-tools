@@ -8,6 +8,7 @@ from typing import Any
 import yaml
 
 from .types import (
+    InteractiveTPUConfig,
     QuotaGroupConfig,
     ResourceConfig,
     SchedulerConfig,
@@ -24,6 +25,7 @@ class QueueConfig:
     primary_bucket_region: str
     secrets: dict[str, str]
     user_limits: UserLimitConfig
+    interactive_tpus: dict[str, InteractiveTPUConfig]
 
     @property
     def primary_bucket(self) -> str:
@@ -100,6 +102,23 @@ def parse_config(raw: dict[str, Any]) -> QueueConfig:
         users={str(k): int(v) for k, v in limits_raw.get("users", {}).items()},
     )
 
+    interactive_tpus: dict[str, InteractiveTPUConfig] = {}
+    for name, cfg in raw.get("interactive_tpus", {}).items():
+        version = str(cfg.get("version", "v4"))
+        if version != "v4":
+            raise ValueError(
+                f"Interactive TPU {name} uses {version}; this restricted group only supports v4"
+            )
+        interactive_tpus[str(name)] = InteractiveTPUConfig(
+            name=str(name),
+            version=version,
+            zone=str(cfg["zone"]),
+            project=str(cfg["project"]),
+            workers=int(cfg.get("workers", 1)),
+            description=str(cfg.get("description", "")),
+            aliases=tuple(str(x) for x in cfg.get("aliases", [])),
+        )
+
     return QueueConfig(
         resources=resources,
         quota_groups=quota_groups,
@@ -108,6 +127,7 @@ def parse_config(raw: dict[str, Any]) -> QueueConfig:
         primary_bucket_region=primary_region,
         secrets={str(k): str(v) for k, v in raw.get("secrets", {}).items()},
         user_limits=user_limits,
+        interactive_tpus=interactive_tpus,
     )
 
 

@@ -32,3 +32,36 @@ Validation:
 No real TPU or GCP queued resource was launched.
 
 Implementation commit: `1b646295e94352a98526a5151d8ef0b25cd7775f`.
+
+## 2026-06-26 - Restricted Shared Interactive TPU Commands
+
+Goal: allow users to use pre-existing shared v4 interactive TPUs without
+restoring direct TPU lifecycle commands.
+
+Plan:
+- Add an `interactive_tpus` allowlist to queue config.
+- Add `tpu interactive` commands for list/info/ssh/run/tmux/attach/output and
+  file copy.
+- Do not add create/delete/stop/start under `tpu interactive`.
+- Validate parsing and allowlist behavior locally; do not launch or mutate TPU
+  resources.
+
+Result:
+- Added `InteractiveTPUConfig` and `interactive_tpus` parsing with v4-only
+  validation.
+- Added connect-only `tpu interactive` subcommands:
+  `list`, `info`, `ssh`, `run`, `tmux`, `attach`, `output`, `tail`,
+  `tmux-ls`, `put`, and `get`.
+- Added default allowlist entry `v4-4-01-interactive` with alias
+  `v4-interactive`.
+- Added tests for allowlist resolution, default config, and rejection of
+  lifecycle verbs under `tpu interactive`.
+
+Validation:
+- `python3 -m compileall src tests`
+- `PYTHONPATH=src python3 -m unittest discover -s tests`
+- `PYTHONPATH=src python3 -m irom_tpu_tools.cli interactive --help`
+- `PYTHONPATH=src python3 -m irom_tpu_tools.cli interactive list`
+- Parser smoke for `tpu interactive run v4-interactive -- hostname`
+
+No TPU command was executed against GCP.
