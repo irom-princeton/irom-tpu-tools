@@ -40,6 +40,10 @@ class Backend(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def get_tpu_vm_state(self, name: str, project: str, zone: str) -> str | None:
+        raise NotImplementedError
+
+    @abstractmethod
     def delete_queued_resource(self, name: str, project: str, zone: str) -> bool:
         raise NotImplementedError
 
@@ -100,18 +104,26 @@ class GCPBackend(Backend):
         *,
         check: bool = True,
         input_data: str | None = None,
+        timeout: float | None = None,
     ) -> subprocess.CompletedProcess[str]:
         logger.debug("Running: %s", " ".join(cmd))
         if self.dry_run_commands:
             logger.info("[dry-run] %s", " ".join(cmd))
             return subprocess.CompletedProcess(cmd, 0, "", "")
-        return subprocess.run(
-            cmd,
-            check=check,
-            capture_output=True,
-            text=True,
-            input=input_data,
-        )
+        try:
+            return subprocess.run(
+                cmd,
+                check=check,
+                capture_output=True,
+                text=True,
+                input=input_data,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            logger.warning("Command timed out after %.1fs: %s", timeout or 0, " ".join(cmd))
+            stdout = exc.stdout if isinstance(exc.stdout, str) else ""
+            stderr = exc.stderr if isinstance(exc.stderr, str) else ""
+            return subprocess.CompletedProcess(cmd, 124, stdout, stderr)
 
     def create_queued_resource(
         self,
@@ -155,7 +167,7 @@ class GCPBackend(Backend):
         if label_workaround:
             cmd.append("--labels=env=prod")
         try:
-            self._run(cmd)
+            self._run(cmd, timeout=120)
             return True
         except subprocess.CalledProcessError as exc:
             logger.error("Failed to create queued resource %s: %s", name, exc.stderr)
@@ -179,7 +191,7 @@ class GCPBackend(Backend):
             "--format",
             "json",
         ]
-        result = self._run(cmd, check=False)
+        result = self._run(cmd, check=False, timeout=30)
         if result.returncode != 0 or not result.stdout.strip():
             return None
         try:
@@ -197,6 +209,32 @@ class GCPBackend(Backend):
             logger.warning("Unknown queued resource state for %s: %s", name, state)
             return None
 
+    def get_tpu_vm_state(self, name: str, project: str, zone: str) -> str | None:
+        cmd = [
+            "gcloud",
+            "alpha",
+            "compute",
+            "tpus",
+            "tpu-vm",
+            "describe",
+            name,
+            "--project",
+            project,
+            "--zone",
+            zone,
+            "--format",
+            "json(state)",
+        ]
+        result = self._run(cmd, check=False, timeout=30)
+        if result.returncode != 0 or not result.stdout.strip():
+            return None
+        try:
+            data = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            return None
+        state = data.get("state")
+        return str(state) if state else None
+
     def delete_queued_resource(self, name: str, project: str, zone: str) -> bool:
         cmd = [
             "gcloud",
@@ -212,7 +250,7 @@ class GCPBackend(Backend):
             zone,
             "--quiet",
         ]
-        result = self._run(cmd, check=False)
+        result = self._run(cmd, check=False, timeout=120)
         if result.returncode == 0:
             return True
         if "not found" in (result.stderr or result.stdout).lower():
@@ -235,7 +273,7 @@ class GCPBackend(Backend):
             zone,
             "--quiet",
         ]
-        result = self._run(cmd, check=False)
+        result = self._run(cmd, check=False, timeout=120)
         if result.returncode == 0:
             return True
         if "not found" in (result.stderr or result.stdout).lower():
@@ -262,7 +300,7 @@ class GCPBackend(Backend):
         ]
         if name_prefix:
             cmd.append(f"--filter=name:{name_prefix}")
-        result = self._run(cmd, check=False)
+        result = self._run(cmd, check=False, timeout=30)
         if result.returncode != 0:
             return []
         return [line.rsplit("/", 1)[-1] for line in result.stdout.splitlines() if line]
@@ -286,7 +324,7 @@ class GCPBackend(Backend):
         ]
         if name_prefix:
             cmd.append(f"--filter=name:{name_prefix}")
-        result = self._run(cmd, check=False)
+        result = self._run(cmd, check=False, timeout=30)
         if result.returncode != 0 or not result.stdout.strip():
             return []
         try:
@@ -318,23 +356,23 @@ class GCPBackend(Backend):
             "--command",
             command,
         ]
-        return self._run(cmd, check=False)
+        return self._run(cmd, check=False, timeout=60)
 
     def read_gcs(self, url: str) -> str | None:
-        result = self._run(["gsutil", "cat", url], check=False)
+        result = self._run(["gsutil", "cat", url], check=False, timeout=30)
         if result.returncode != 0:
             return None
         return result.stdout
 
     def write_gcs(self, url: str, content: str) -> bool:
-        result = self._run(["gsutil", "cp", "-", url], check=False, input_data=content)
+        result = self._run(["gsutil", "cp", "-", url], check=False, input_data=content, timeout=30)
         return result.returncode == 0
 
     def exists_gcs(self, url: str) -> bool:
-        return self._run(["gsutil", "stat", url], check=False).returncode == 0
+        return self._run(["gsutil", "stat", url], check=False, timeout=20).returncode == 0
 
     def list_gcs(self, prefix: str) -> list[str]:
-        result = self._run(["gsutil", "ls", prefix], check=False)
+        result = self._run(["gsutil", "ls", prefix], check=False, timeout=30)
         if result.returncode != 0:
             return []
         return [line.strip() for line in result.stdout.splitlines() if line.strip()]
@@ -344,10 +382,10 @@ class GCPBackend(Backend):
         if recursive:
             cmd.append("-r")
         cmd.append(url)
-        return self._run(cmd, check=False).returncode == 0
+        return self._run(cmd, check=False, timeout=60).returncode == 0
 
     def upload_file(self, local_path: str, gcs_url: str) -> bool:
-        return self._run(["gsutil", "cp", local_path, gcs_url], check=False).returncode == 0
+        return self._run(["gsutil", "cp", local_path, gcs_url], check=False, timeout=120).returncode == 0
 
 
 @dataclass
@@ -480,6 +518,16 @@ class DryRunBackend(Backend):
         if not qr or qr.project != project or qr.zone != zone:
             return None
         return qr.state
+
+    def get_tpu_vm_state(self, name: str, project: str, zone: str) -> str | None:
+        qr = self.queued_resources.get(name)
+        if not qr or qr.project != project or qr.zone != zone:
+            return None
+        if qr.state == QRState.ACTIVE:
+            return "READY"
+        if qr.state in {QRState.SUSPENDING, QRState.SUSPENDED}:
+            return "PREEMPTED"
+        return None
 
     def force_active(self, name: str) -> None:
         self.queued_resources[name].state = QRState.ACTIVE

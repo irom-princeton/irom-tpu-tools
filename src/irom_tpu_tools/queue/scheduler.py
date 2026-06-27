@@ -24,6 +24,8 @@ from .types import (
 
 logger = logging.getLogger(__name__)
 
+TERMINAL_TPU_VM_STATES = {"PREEMPTED", "TERMINATED", "STOPPED", "DELETED", "FAILED"}
+
 
 def _parse_time(value: str | None) -> datetime | None:
     if not value:
@@ -188,6 +190,10 @@ class Scheduler:
             self._cleanup_job_resources(qr_name, resource)
             return
         if state == QRState.ACTIVE:
+            vm_state = self.backend.get_tpu_vm_state(qr_name, resource.project, resource.zone)
+            if vm_state in TERMINAL_TPU_VM_STATES:
+                self._handle_preemption(job_id, qr_name, resource, f"TPU_VM_{vm_state}")
+                return
             if job.state.status == JobStatus.PROVISIONING:
                 job.state.status = JobStatus.RUNNING
                 job.state.provisioned_at = utc_now()
