@@ -43,6 +43,9 @@ class Backend(ABC):
     def get_tpu_vm_state(self, name: str, project: str, zone: str) -> str | None:
         raise NotImplementedError
 
+    def get_tpu_vm_status(self, name: str, project: str, zone: str) -> TpuVmStatus:
+        return TpuVmStatus(state=self.get_tpu_vm_state(name, project, zone))
+
     @abstractmethod
     def delete_queued_resource(self, name: str, project: str, zone: str) -> bool:
         raise NotImplementedError
@@ -210,6 +213,9 @@ class GCPBackend(Backend):
             return None
 
     def get_tpu_vm_state(self, name: str, project: str, zone: str) -> str | None:
+        return self.get_tpu_vm_status(name, project, zone).state
+
+    def get_tpu_vm_status(self, name: str, project: str, zone: str) -> TpuVmStatus:
         cmd = [
             "gcloud",
             "alpha",
@@ -223,17 +229,23 @@ class GCPBackend(Backend):
             "--zone",
             zone,
             "--format",
-            "json(state)",
+            "json(state,health,healthDescription)",
         ]
         result = self._run(cmd, check=False, timeout=30)
         if result.returncode != 0 or not result.stdout.strip():
-            return None
+            return TpuVmStatus()
         try:
             data = json.loads(result.stdout)
         except json.JSONDecodeError:
-            return None
+            return TpuVmStatus()
         state = data.get("state")
-        return str(state) if state else None
+        health = data.get("health")
+        health_description = data.get("healthDescription")
+        return TpuVmStatus(
+            state=str(state) if state else None,
+            health=str(health) if health else None,
+            health_description=str(health_description) if health_description else None,
+        )
 
     def delete_queued_resource(self, name: str, project: str, zone: str) -> bool:
         cmd = [
@@ -389,6 +401,13 @@ class GCPBackend(Backend):
 
 
 @dataclass
+class TpuVmStatus:
+    state: str | None = None
+    health: str | None = None
+    health_description: str | None = None
+
+
+@dataclass
 class SimulatedQR:
     name: str
     node_id: str
@@ -398,6 +417,8 @@ class SimulatedQR:
     runtime_version: str
     spot: bool
     state: QRState = QRState.WAITING_FOR_RESOURCES
+    health: str = "HEALTHY"
+    health_description: str | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     active_at: datetime | None = None
 
@@ -440,6 +461,8 @@ class DryRunBackend(Backend):
                 runtime_version=raw["runtime_version"],
                 spot=bool(raw["spot"]),
                 state=QRState(raw["state"]),
+                health=str(raw.get("health") or "HEALTHY"),
+                health_description=raw.get("health_description"),
                 created_at=datetime.fromisoformat(raw["created_at"]),
                 active_at=(
                     datetime.fromisoformat(raw["active_at"])
@@ -459,6 +482,8 @@ class DryRunBackend(Backend):
                 "runtime_version": qr.runtime_version,
                 "spot": qr.spot,
                 "state": qr.state.value,
+                "health": qr.health,
+                "health_description": qr.health_description,
                 "created_at": qr.created_at.isoformat(),
                 "active_at": qr.active_at.isoformat() if qr.active_at else None,
             }
@@ -520,14 +545,25 @@ class DryRunBackend(Backend):
         return qr.state
 
     def get_tpu_vm_state(self, name: str, project: str, zone: str) -> str | None:
+        return self.get_tpu_vm_status(name, project, zone).state
+
+    def get_tpu_vm_status(self, name: str, project: str, zone: str) -> TpuVmStatus:
         qr = self.queued_resources.get(name)
         if not qr or qr.project != project or qr.zone != zone:
-            return None
+            return TpuVmStatus()
         if qr.state == QRState.ACTIVE:
-            return "READY"
+            return TpuVmStatus(
+                state="READY",
+                health=qr.health,
+                health_description=qr.health_description,
+            )
         if qr.state in {QRState.SUSPENDING, QRState.SUSPENDED}:
-            return "PREEMPTED"
-        return None
+            return TpuVmStatus(
+                state="PREEMPTED",
+                health=qr.health,
+                health_description=qr.health_description,
+            )
+        return TpuVmStatus()
 
     def force_active(self, name: str) -> None:
         self.queued_resources[name].state = QRState.ACTIVE
@@ -536,6 +572,14 @@ class DryRunBackend(Backend):
 
     def force_preempt(self, name: str) -> None:
         self.queued_resources[name].state = QRState.SUSPENDING
+        self._save_qrs()
+
+    def force_unhealthy_maintenance(self, name: str) -> None:
+        qr = self.queued_resources[name]
+        qr.state = QRState.ACTIVE
+        qr.active_at = qr.active_at or self.now()
+        qr.health = "UNHEALTHY_MAINTENANCE"
+        qr.health_description = "The TPU had a maintenance event"
         self._save_qrs()
 
     def delete_queued_resource(self, name: str, project: str, zone: str) -> bool:
@@ -571,7 +615,7 @@ class DryRunBackend(Backend):
                     {
                         "name": name,
                         "state": "READY",
-                        "health": "HEALTHY",
+                        "health": qr.health,
                         "acceleratorType": qr.accelerator_type,
                         "createTime": qr.created_at.isoformat(),
                     }

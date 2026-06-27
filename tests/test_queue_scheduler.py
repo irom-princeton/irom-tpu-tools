@@ -167,6 +167,31 @@ class SchedulerTests(unittest.TestCase):
             self.assertEqual(state["current_attempt"], 1)
             self.assertEqual(len(backend.queued_resources), 1)
 
+    def test_requeues_ready_unhealthy_maintenance_tpu(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            backend = DryRunBackend(d)
+            config = make_config(Path(d))
+            write_job(backend, config.primary_bucket, make_spec("job-a"))
+            scheduler = Scheduler(backend, config)
+
+            scheduler.run_once()
+            qr_name = next(iter(backend.queued_resources))
+            backend.force_active(qr_name)
+            scheduler.run_once()
+
+            backend.force_unhealthy_maintenance(qr_name)
+            scheduler.run_once()
+            state = json.loads(
+                backend.read_gcs(f"{config.primary_bucket}/jobs/job-a/status.json") or "{}"
+            )
+            self.assertEqual(state["status"], "PROVISIONING")
+            self.assertEqual(state["current_attempt"], 1)
+            self.assertEqual(
+                state["attempts"][0]["error"],
+                "TPU_VM_HEALTH_UNHEALTHY_MAINTENANCE",
+            )
+            self.assertEqual(len(backend.queued_resources), 1)
+
     def test_user_limit_keeps_second_job_pending(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             backend = DryRunBackend(d)

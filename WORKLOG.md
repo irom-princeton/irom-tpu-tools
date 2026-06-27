@@ -65,3 +65,23 @@ Validation:
 - Parser smoke for `tpu interactive run v4-interactive -- hostname`
 
 No TPU command was executed against GCP.
+
+## 2026-06-27 - Health-Aware TPU Requeue
+
+Goal: make the queue scheduler requeue jobs when a TPU VM is still reported as
+`READY` but health has moved to `UNHEALTHY_MAINTENANCE`, because worker SSH is
+unavailable in that state and queue status can otherwise remain stale.
+
+Result:
+- Added `TpuVmStatus` with state, health, and health description.
+- Extended the GCP and dry-run backends to expose TPU VM health from
+  `gcloud alpha compute tpus tpu-vm describe`.
+- Changed scheduler active-QR polling to treat
+  `TPU_VM_HEALTH_UNHEALTHY_MAINTENANCE` as a retry/preemption signal.
+- Added a dry-run scheduler test for `READY` plus `UNHEALTHY_MAINTENANCE`.
+
+Validation:
+- `python3 -m py_compile src/irom_tpu_tools/queue/backend.py src/irom_tpu_tools/queue/scheduler.py tests/test_queue_scheduler.py`
+- `.venv/bin/python -m unittest tests.test_queue_scheduler`
+- `PYTHONPATH=src python3 -m unittest tests.test_queue_scheduler`
+- `git diff --check`
