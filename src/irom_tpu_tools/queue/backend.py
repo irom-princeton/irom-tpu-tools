@@ -371,33 +371,45 @@ class GCPBackend(Backend):
         return self._run(cmd, check=False, timeout=60)
 
     def read_gcs(self, url: str) -> str | None:
-        result = self._run(["gsutil", "cat", url], check=False, timeout=30)
+        result = self._run(["gcloud", "storage", "cat", url], check=False, timeout=15)
         if result.returncode != 0:
             return None
         return result.stdout
 
     def write_gcs(self, url: str, content: str) -> bool:
-        result = self._run(["gsutil", "cp", "-", url], check=False, input_data=content, timeout=30)
+        result = self._run(
+            ["gcloud", "storage", "cp", "-", url],
+            check=False,
+            input_data=content,
+            timeout=15,
+        )
         return result.returncode == 0
 
     def exists_gcs(self, url: str) -> bool:
-        return self._run(["gsutil", "stat", url], check=False, timeout=20).returncode == 0
+        return self._run(["gcloud", "storage", "ls", url], check=False, timeout=10).returncode == 0
 
     def list_gcs(self, prefix: str) -> list[str]:
-        result = self._run(["gsutil", "ls", prefix], check=False, timeout=30)
+        result = self._run(["gcloud", "storage", "ls", prefix], check=False, timeout=15)
         if result.returncode != 0:
             return []
         return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
     def delete_gcs(self, url: str, recursive: bool = False) -> bool:
-        cmd = ["gsutil", "rm"]
+        cmd = ["gcloud", "storage", "rm"]
         if recursive:
             cmd.append("-r")
         cmd.append(url)
-        return self._run(cmd, check=False, timeout=60).returncode == 0
+        return self._run(cmd, check=False, timeout=30).returncode == 0
 
     def upload_file(self, local_path: str, gcs_url: str) -> bool:
-        return self._run(["gsutil", "cp", local_path, gcs_url], check=False, timeout=120).returncode == 0
+        return (
+            self._run(
+                ["gcloud", "storage", "cp", local_path, gcs_url],
+                check=False,
+                timeout=120,
+            ).returncode
+            == 0
+        )
 
 
 @dataclass
