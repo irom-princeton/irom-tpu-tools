@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import argparse
 import base64
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -1495,6 +1497,127 @@ interactive_tpus:
             self.assertIn("## iqtest-live", text)
             self.assertIn("Status:  READY/HEALTHY", text)
             self.assertIn("Local watchers: (none)", text)
+
+
+class GCPBackendAccountPinningTests(unittest.TestCase):
+    """Control-plane gcloud calls are pinned to a configured service account so
+    queue operations never ride the ambient (possibly personal, RAPT-expiring)
+    gcloud identity -- while interactive SSH stays on the invoking user."""
+
+    SA = "irom-service-account@mae-irom-lab-guided-data.iam.gserviceaccount.com"
+
+    @staticmethod
+    def _mock_run() -> Mock:
+        # returncode 0 with parseable "{}" stdout keeps every JSON-parsing
+        # method on its success path so each records exactly one subprocess call.
+        return Mock(return_value=subprocess.CompletedProcess([], 0, "{}", ""))
+
+    def _exercise_control_plane(self, backend: GCPBackend) -> None:
+        backend.read_gcs("gs://b/x")
+        backend.write_gcs("gs://b/x", "data")
+        backend.exists_gcs("gs://b/x")
+        backend.list_gcs("gs://b/")
+        backend.delete_gcs("gs://b/x", recursive=True)
+        backend.upload_file("/tmp/x", "gs://b/x")
+        backend.create_queued_resource(
+            name="q",
+            node_id="q",
+            project="p",
+            zone="z",
+            accelerator_type="v6e-8",
+            runtime_version="rt",
+            spot=True,
+            startup_script_path="/tmp/s.sh",
+            service_account=None,
+        )
+        backend.delete_queued_resource("q", "p", "z")
+        backend.delete_tpu_vm("q", "p", "z")
+        backend.get_queued_resource_state("q", "p", "z")
+        backend.get_tpu_vm_state("q", "p", "z")
+        backend.list_queued_resources("p", "z")
+        backend.list_tpu_vms("p", "z")
+        backend.get_tpu_vm_ssh_keys("q", "p", "z")
+        backend.set_tpu_vm_ssh_keys("q", "p", "z", "user:key")
+
+    def test_control_plane_calls_pin_account_when_configured(self) -> None:
+        backend = GCPBackend(control_plane_account=self.SA)
+        run = self._mock_run()
+        with patch("irom_tpu_tools.queue.backend.subprocess.run", run):
+            self._exercise_control_plane(backend)
+
+        self.assertGreaterEqual(run.call_count, 15)
+        for call in run.call_args_list:
+            cmd = call.args[0]
+            env = call.kwargs.get("env")
+            self.assertIsNotNone(env, f"expected a pinned env for: {cmd}")
+            self.assertEqual(
+                env.get("CLOUDSDK_CORE_ACCOUNT"),
+                self.SA,
+                f"account not pinned for: {cmd}",
+            )
+            # Parent environment must be inherited, not replaced wholesale.
+            self.assertIn("PATH", env)
+
+    def test_interactive_ssh_does_not_pin_account(self) -> None:
+        # The critical scoping guarantee: SSH sessions keep the invoking user's
+        # identity even when a control-plane account is configured.
+        backend = GCPBackend(control_plane_account=self.SA)
+        run = self._mock_run()
+        with patch("irom_tpu_tools.queue.backend.subprocess.run", run):
+            backend.ssh_tpu_vm("node", "p", "z", 0, "hostname")
+
+        self.assertEqual(run.call_count, 1)
+        env = run.call_args.kwargs.get("env")
+        if env is not None:
+            self.assertNotIn("CLOUDSDK_CORE_ACCOUNT", env)
+
+    def test_no_account_configured_preserves_ambient_env(self) -> None:
+        # Default construction must be byte-for-byte the pre-change behavior:
+        # subprocess.run receives no env override anywhere.
+        backend = GCPBackend()
+        run = self._mock_run()
+        with patch("irom_tpu_tools.queue.backend.subprocess.run", run):
+            self._exercise_control_plane(backend)
+            backend.ssh_tpu_vm("node", "p", "z", 0, "hostname")
+
+        self.assertGreater(run.call_count, 0)
+        for call in run.call_args_list:
+            self.assertIsNone(
+                call.kwargs.get("env"),
+                f"no env override expected when account unset: {call.args[0]}",
+            )
+
+    def test_empty_account_string_is_treated_as_unset(self) -> None:
+        backend = GCPBackend(control_plane_account="")
+        self.assertIsNone(backend.control_plane_account)
+        run = self._mock_run()
+        with patch("irom_tpu_tools.queue.backend.subprocess.run", run):
+            backend.read_gcs("gs://b/x")
+        self.assertIsNone(run.call_args.kwargs.get("env"))
+
+    def test_dry_run_never_invokes_subprocess(self) -> None:
+        backend = GCPBackend(dry_run_commands=True, control_plane_account=self.SA)
+        run = self._mock_run()
+        with patch("irom_tpu_tools.queue.backend.subprocess.run", run):
+            backend.write_gcs("gs://b/x", "data")
+            backend.delete_queued_resource("q", "p", "z")
+        run.assert_not_called()
+
+    def test_backend_factory_reads_account_from_env(self) -> None:
+        from irom_tpu_tools.queue.cli import _backend
+
+        args = argparse.Namespace(dry_run=False)
+        with patch.dict(os.environ, {"TPU_CONTROL_PLANE_ACCOUNT": self.SA}):
+            backend = _backend(args)
+        self.assertIsInstance(backend, GCPBackend)
+        self.assertEqual(backend.control_plane_account, self.SA)
+
+        env_without = {
+            k: v for k, v in os.environ.items() if k != "TPU_CONTROL_PLANE_ACCOUNT"
+        }
+        with patch.dict(os.environ, env_without, clear=True):
+            backend = _backend(args)
+        self.assertIsNone(backend.control_plane_account)
 
 
 if __name__ == "__main__":

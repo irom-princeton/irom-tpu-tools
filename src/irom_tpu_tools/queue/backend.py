@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 import json
 import logging
+import os
 import shutil
 import subprocess
 import tempfile
@@ -123,8 +124,23 @@ class Backend(ABC):
 
 
 class GCPBackend(Backend):
-    def __init__(self, *, dry_run_commands: bool = False):
+    def __init__(
+        self,
+        *,
+        dry_run_commands: bool = False,
+        control_plane_account: str | None = None,
+    ):
         self.dry_run_commands = dry_run_commands
+        # When set, control-plane gcloud / gcloud-storage invocations are pinned
+        # to this account via CLOUDSDK_CORE_ACCOUNT so queue operations never
+        # depend on the ambient `gcloud config account`. That ambient account
+        # can silently drift to a personal login subject to org-enforced
+        # reauth (RAPT), which breaks long-running/unattended queue calls with
+        # ReauthUnattendedError. The account must already be an activated
+        # credential in the active gcloud config. Interactive/admin SSH is
+        # deliberately left on the ambient identity (see ssh_tpu_vm), so the
+        # SSH session still runs as the invoking user, not this service account.
+        self.control_plane_account = control_plane_account or None
 
     def _run(
         self,
@@ -133,11 +149,17 @@ class GCPBackend(Backend):
         check: bool = True,
         input_data: str | None = None,
         timeout: float | None = None,
+        pin_account: bool = True,
     ) -> subprocess.CompletedProcess[str]:
         logger.debug("Running: %s", " ".join(cmd))
         if self.dry_run_commands:
             logger.info("[dry-run] %s", " ".join(cmd))
             return subprocess.CompletedProcess(cmd, 0, "", "")
+        env: dict[str, str] | None = None
+        if pin_account and self.control_plane_account:
+            # Inherit the full parent environment (PATH, HOME, CLOUDSDK_CONFIG,
+            # etc.) and only override the active account.
+            env = {**os.environ, "CLOUDSDK_CORE_ACCOUNT": self.control_plane_account}
         try:
             return subprocess.run(
                 cmd,
@@ -146,6 +168,7 @@ class GCPBackend(Backend):
                 text=True,
                 input=input_data,
                 timeout=timeout,
+                env=env,
             )
         except subprocess.TimeoutExpired as exc:
             logger.warning("Command timed out after %.1fs: %s", timeout or 0, " ".join(cmd))
@@ -405,7 +428,11 @@ class GCPBackend(Backend):
             "--command",
             command,
         ]
-        return self._run(cmd, check=False, timeout=60)
+        # Do NOT pin the control-plane account here: an interactive/admin SSH
+        # session must run as the invoking user (their key is installed in the
+        # node ssh-keys metadata under their own username). Pinning the service
+        # account would change the SSH identity and can break per-user access.
+        return self._run(cmd, check=False, timeout=60, pin_account=False)
 
     def get_tpu_vm_ssh_keys(self, name: str, project: str, zone: str) -> str | None:
         cmd = [

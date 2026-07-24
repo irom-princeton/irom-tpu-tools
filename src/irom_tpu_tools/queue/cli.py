@@ -111,7 +111,14 @@ def _backend(args: argparse.Namespace) -> Backend:
             str(base_dir),
             provision_delay_seconds=float(getattr(args, "provision_delay", 0.0)),
         )
-    return GCPBackend()
+    # Pin control-plane gcloud calls to this account (if set) so queue GCS/TPU
+    # operations do not depend on the ambient `gcloud config account`, which can
+    # drift to a personal login subject to org-enforced reauth (RAPT). Opt-in:
+    # when TPU_CONTROL_PLANE_ACCOUNT is unset, behavior is unchanged. The account
+    # must already be an activated credential in the active gcloud config.
+    return GCPBackend(
+        control_plane_account=os.environ.get("TPU_CONTROL_PLANE_ACCOUNT") or None
+    )
 
 
 def _load_config(args: argparse.Namespace) -> QueueConfig:
