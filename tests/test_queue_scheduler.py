@@ -299,6 +299,75 @@ class SchedulerTests(unittest.TestCase):
             self.assertNotIn("job-a", scheduler._create_retry_not_before)
             self.assertEqual(scheduler.jobs["job-a"].state.status, JobStatus.PROVISIONING)
 
+    def test_step_exception_does_not_block_other_steps_or_state_write(self) -> None:
+        # Regression test for the ENOSPC-during-schedule_pending_jobs
+        # incident: write_startup_script raised OSError(28, "No space left
+        # on device") from inside _create_queued_resource, and run_once()
+        # had no per-step isolation, so the whole iteration aborted before
+        # _maybe_write_scheduler_state() ever ran. That froze the aggregated
+        # scheduler_state.json cache that `tpu list`/`tpu status`/
+        # `tpu admin jobs` read from for *every* user, even though earlier
+        # steps in that same iteration may have already written their own
+        # per-job status.json fine.
+        with tempfile.TemporaryDirectory() as d:
+            backend = DryRunBackend(d)
+            config = make_config(Path(d))
+
+            # job-a is pending; its queued-resource create will blow up.
+            write_job(backend, config.primary_bucket, make_spec("job-a"))
+
+            # job-b is terminal and past retention. reap_terminal_jobs runs
+            # *after* schedule_pending_jobs in run_once(), so it only reaps
+            # job-b if the earlier failure did not abort the whole pass.
+            job_b_spec = make_spec("job-b")
+            job_b_state = JobState.new()
+            job_b_state.status = JobStatus.FAILED
+            job_b_state.last_updated = (
+                datetime.now(UTC)
+                - timedelta(days=config.scheduler.job_retention_days + 1)
+            ).isoformat()
+            job_b_dir = f"{config.primary_bucket}/jobs/job-b"
+            backend.write_gcs(f"{job_b_dir}/spec.json", json.dumps(job_b_spec.to_dict()))
+            backend.write_gcs(
+                f"{job_b_dir}/status.json", json.dumps(job_b_state.to_dict())
+            )
+
+            scheduler = Scheduler(backend, config)
+
+            with patch(
+                "irom_tpu_tools.queue.scheduler.write_startup_script",
+                side_effect=OSError(28, "No space left on device"),
+            ):
+                with self.assertLogs(
+                    "irom_tpu_tools.queue.scheduler", level="ERROR"
+                ) as logs:
+                    scheduler.run_once()
+
+            # (a) the failure is logged with step and job context, not
+            # swallowed silently.
+            joined = "\n".join(logs.output)
+            self.assertIn("job-a", joined)
+            self.assertIn("No space left on device", joined)
+
+            # The create-failure backoff still registers for job-a (the
+            # exception is treated the same as a normal create failure, so
+            # the scheduler will not hammer the API on every scan) and
+            # job-a is left PENDING to retry rather than lost.
+            self.assertIn("job-a", scheduler._create_retry_not_before)
+            self.assertEqual(scheduler.jobs["job-a"].state.status, JobStatus.PENDING)
+
+            # (b) later steps in the same run_once() pass still executed:
+            # the unrelated, already-terminal job-b was reaped.
+            self.assertNotIn("job-b", scheduler.jobs)
+
+            # (c) _maybe_write_scheduler_state() still ran despite the
+            # earlier step's exception, so the CLI-facing cache is current.
+            cache = json.loads(
+                backend.read_gcs(f"{config.primary_bucket}/scheduler_state.json") or "{}"
+            )
+            self.assertIn("updated_at", cache)
+            self.assertEqual({j["job_id"] for j in cache["jobs"]}, {"job-a"})
+
     def test_scans_independent_job_records_concurrently(self) -> None:
         class TrackingBackend(DryRunBackend):
             def __init__(self, base_dir: str):

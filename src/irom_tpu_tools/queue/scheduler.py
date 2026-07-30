@@ -467,7 +467,24 @@ class Scheduler:
                 > max_user_chips
             ):
                 continue
-            if self._create_queued_resource(job_id, resource):
+            try:
+                created = self._create_queued_resource(job_id, resource)
+            except Exception:
+                # A raised exception here (e.g. the ENOSPC OSError from
+                # write_startup_script during a disk-full incident) must be
+                # treated the same as a normal create failure: it still needs
+                # to register the create-failure backoff for this one job so
+                # the scheduler does not hammer the API on retry, and it must
+                # not abort scheduling of the *other* pending jobs in this
+                # same pass. Log with job/resource context so operators can
+                # still diagnose it in scheduler.log.
+                logger.exception(
+                    "Queued-resource create raised for job %s (resource=%s)",
+                    job_id,
+                    resource.name,
+                )
+                created = False
+            if created:
                 self._create_retry_not_before.pop(job_id, None)
                 chips_by_quota[resource.quota_group] = (
                     chips_by_quota.get(resource.quota_group, 0) + resource.chips
@@ -664,6 +681,27 @@ class Scheduler:
             raise ValueError(f"Job reference is ambiguous: {job_ref} ({', '.join(matches)})")
         return matches[0]
 
+    def _run_step(self, step_name: str, func, *args, **kwargs):
+        """Run one run_once step, isolating its exceptions from the rest.
+
+        A step failing (for example the ENOSPC OSError from
+        write_startup_script during a disk-full incident, raised out of
+        schedule_pending_jobs) must not prevent the other steps in the same
+        run_once() pass from still running, and must not prevent
+        _maybe_write_scheduler_state() from still executing afterwards. The
+        exception is always logged with full context via logger.exception so
+        operators can still see it in scheduler.log; it is never swallowed
+        silently.
+        """
+        try:
+            return func(*args, **kwargs)
+        except Exception:
+            logger.exception(
+                "Scheduler step %r failed; continuing with remaining steps",
+                step_name,
+            )
+            return None
+
     def run_once(
         self,
         *,
@@ -672,8 +710,33 @@ class Scheduler:
     ) -> None:
         if focus_job_ref and focus_user:
             raise ValueError("Cannot combine focus_job_ref and focus_user")
-        self.scan_jobs()
-        focus_job_id = self._resolve_job_id(focus_job_ref) if focus_job_ref else None
+        try:
+            self._run_once_steps(focus_job_ref=focus_job_ref, focus_user=focus_user)
+        finally:
+            # Always attempt to flush the aggregated scheduler_state.json
+            # cache that `tpu list`/`tpu status`/`tpu admin jobs` read from,
+            # even if one or more steps above raised. This is the specific
+            # behavior that was missing: previously a single step exception
+            # aborted the whole run_once() iteration before this call ever
+            # ran, freezing that cache -- even though the underlying per-job
+            # status.json writes from earlier steps in the same broken
+            # iteration may have already succeeded. Route through _run_step
+            # too so a failure while writing scheduler_state.json itself
+            # (e.g. the same disk-full condition) is logged, not raised, and
+            # does not mask whatever exception the try block already saw.
+            self._run_step("write_scheduler_state", self._maybe_write_scheduler_state)
+
+    def _run_once_steps(
+        self,
+        *,
+        focus_job_ref: str | None,
+        focus_user: str | None,
+    ) -> None:
+        self._run_step("scan_jobs", self.scan_jobs)
+
+        focus_job_id = (
+            self._resolve_job_id(focus_job_ref) if focus_job_ref else None
+        )
         if focus_job_id:
             job_ids = {focus_job_id}
             cancel_job_ids = job_ids
@@ -688,7 +751,7 @@ class Scheduler:
                 for job_id, job in self.jobs.items()
                 if job_id not in job_ids and job.state.status not in TERMINAL_STATUSES
             }
-            self._refresh_job_states(quota_job_ids)
+            self._run_step("refresh_job_states", self._refresh_job_states, quota_job_ids)
             # Cancellation only releases resources, so honor every user's
             # sentinel even when lifecycle work is otherwise focus-restricted.
             # Otherwise non-focus users can never delete pending/active jobs.
@@ -696,21 +759,22 @@ class Scheduler:
         else:
             job_ids = None
             cancel_job_ids = None
-        self.check_canceled_jobs(cancel_job_ids)
+        self._run_step("check_canceled_jobs", self.check_canceled_jobs, cancel_job_ids)
         if focus_job_id is None:
             # Like cancellations, key provisioning is a safe user request the
             # scheduler identity must serve even in focus-user mode.
-            self._maybe_sync_interactive_ssh_keys()
-        self.poll_queued_resources(job_ids)
-        self.check_completed_jobs(job_ids)
-        self.check_retry_requests(job_ids)
+            self._run_step("sync_interactive_ssh_keys", self._maybe_sync_interactive_ssh_keys)
+        self._run_step("poll_queued_resources", self.poll_queued_resources, job_ids)
+        self._run_step("check_completed_jobs", self.check_completed_jobs, job_ids)
+        self._run_step("check_retry_requests", self.check_retry_requests, job_ids)
         if job_ids is not None:
-            self.schedule_pending_jobs(only_job_ids=job_ids)
+            self._run_step(
+                "schedule_pending_jobs", self.schedule_pending_jobs, only_job_ids=job_ids
+            )
         else:
-            self.schedule_pending_jobs()
-            self.reap_terminal_jobs()
-            self._maybe_reconcile_orphans()
-        self._maybe_write_scheduler_state()
+            self._run_step("schedule_pending_jobs", self.schedule_pending_jobs)
+            self._run_step("reap_terminal_jobs", self.reap_terminal_jobs)
+            self._run_step("reconcile_orphans", self._maybe_reconcile_orphans)
 
     def run_forever(self) -> None:
         while True:
