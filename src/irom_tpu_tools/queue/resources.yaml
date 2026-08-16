@@ -116,7 +116,7 @@ resources:
     zone: us-east1-d
     project: mae-irom-lab-guided-data
     chips: 8
-    workers: 2
+    workers: 1
     spot: true
     enabled: true
     quota_group: v6

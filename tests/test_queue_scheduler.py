@@ -1079,8 +1079,14 @@ class SchedulerTests(unittest.TestCase):
 
     def test_default_config_has_v6e_four_chips_per_worker(self) -> None:
         config = load_config()
+
+        # v6e-8 is a single host regardless of chip count, matching the
+        # v4-8/v5-8 single-host pattern; larger slices scale at 4 chips/worker.
+        v6_8 = config.resources["v6-8"]
+        self.assertEqual(v6_8.workers, 1)
+        self.assertEqual(v6_8.chips, 8)
+
         expected_workers = {
-            "v6-8": 2,
             "v6-16": 4,
             "v6-32": 8,
             "v6-64": 16,
