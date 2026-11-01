@@ -266,6 +266,80 @@ class SchedulerTests(unittest.TestCase):
         self.assertFalse(failed.succeeded)
         self.assertIsNone(failed.content)
 
+    def test_gcp_read_retries_object_replaced_mid_read(self) -> None:
+        # The scheduler rewrites scheduler_state.json every minute; a read that
+        # lands mid-rewrite gets a 404 that clears on the next attempt.
+        backend = GCPBackend()
+        backend._run = Mock(
+            side_effect=[
+                subprocess.CompletedProcess(
+                    [], 1, "", "ERROR: gs://b/q%2Fscheduler_state.json not found: 404."
+                ),
+                subprocess.CompletedProcess([], 0, '{"jobs": []}', ""),
+            ]
+        )
+        with patch("irom_tpu_tools.queue.backend.time.sleep") as sleep:
+            result = backend.read_gcs_result("gs://b/q/scheduler_state.json")
+        self.assertTrue(result.succeeded)
+        self.assertEqual(result.content, '{"jobs": []}')
+        self.assertEqual(backend._run.call_count, 2)
+        sleep.assert_called_once()
+
+    def test_gcp_read_gives_up_after_retries_and_logs_gcloud_error(self) -> None:
+        backend = GCPBackend()
+        backend._run = Mock(
+            return_value=subprocess.CompletedProcess(
+                [], 1, "", "Traceback...\nERROR: (gcloud.storage.cat) auth expired\n"
+            )
+        )
+        with patch("irom_tpu_tools.queue.backend.time.sleep"), self.assertLogs(
+            "irom_tpu_tools.queue.backend", "WARNING"
+        ) as logs:
+            result = backend.read_gcs_result("gs://b/x")
+        self.assertFalse(result.succeeded)
+        self.assertEqual(backend._run.call_count, 3)
+        self.assertIn("auth expired", logs.output[0])
+
+    def test_gcp_read_does_not_retry_missing_object_or_timeout(self) -> None:
+        for returncode, stderr in [
+            (1, "The following URLs matched no objects or files"),
+            (124, "timed out"),
+        ]:
+            backend = GCPBackend()
+            backend._run = Mock(
+                return_value=subprocess.CompletedProcess([], returncode, "", stderr)
+            )
+            with patch("irom_tpu_tools.queue.backend.time.sleep") as sleep:
+                backend.read_gcs_result("gs://b/x")
+            self.assertEqual(backend._run.call_count, 1)
+            sleep.assert_not_called()
+
+    def test_gcp_list_failures_warn_instead_of_looking_empty(self) -> None:
+        backend = GCPBackend()
+        backend._run = Mock(
+            return_value=subprocess.CompletedProcess(
+                [], 1, "", "ERROR: (gcloud) network unreachable"
+            )
+        )
+        with patch("irom_tpu_tools.queue.backend.time.sleep"), self.assertLogs(
+            "irom_tpu_tools.queue.backend", "WARNING"
+        ) as logs:
+            self.assertEqual(backend.list_tpu_vms("p", "z"), [])
+            self.assertEqual(backend.list_queued_resources("p", "z"), [])
+            self.assertEqual(backend.list_gcs("gs://b/jobs/"), [])
+        self.assertEqual(len(logs.output), 3)
+        self.assertTrue(all("network unreachable" in line for line in logs.output))
+
+        # An empty prefix is a real empty listing, not a failure.
+        backend._run = Mock(
+            return_value=subprocess.CompletedProcess(
+                [], 1, "", "ERROR: One or more URLs matched no objects."
+            )
+        )
+        with self.assertNoLogs("irom_tpu_tools.queue.backend", "WARNING"):
+            self.assertEqual(backend.list_gcs("gs://b/jobs/"), [])
+        self.assertEqual(backend._run.call_count, 1)
+
     def test_failed_create_is_backed_off_before_retry(self) -> None:
         class FailOnceBackend(DryRunBackend):
             def __init__(self, base_dir: str):

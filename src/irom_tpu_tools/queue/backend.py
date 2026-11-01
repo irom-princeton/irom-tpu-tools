@@ -10,11 +10,30 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 from typing import Any
 
 from .types import QRState
 
 logger = logging.getLogger(__name__)
+
+# Waits between attempts of a read-only gcloud call; see GCPBackend._run_read.
+READ_RETRY_DELAYS_SECONDS = (1.0, 2.0)
+
+
+def _matched_nothing(result: subprocess.CompletedProcess[str]) -> bool:
+    """True when gcloud storage reports that the object or prefix does not exist."""
+    return "matched no objects" in f"{result.stderr}\n{result.stdout}".lower()
+
+
+def _error_detail(result: subprocess.CompletedProcess[str]) -> str:
+    """The most informative line of a failed command's output, for log messages."""
+    lines = [line.strip() for line in f"{result.stderr}\n{result.stdout}".splitlines()]
+    lines = [line for line in lines if line]
+    if not lines:
+        return "no command output"
+    errors = [line for line in lines if line.startswith("ERROR")]
+    return (errors[0] if errors else lines[-1])[:300]
 
 
 @dataclass(frozen=True)
@@ -175,6 +194,32 @@ class GCPBackend(Backend):
             stdout = exc.stdout if isinstance(exc.stdout, str) else ""
             stderr = exc.stderr if isinstance(exc.stderr, str) else ""
             return subprocess.CompletedProcess(cmd, 124, stdout, stderr)
+
+    def _run_read(
+        self, cmd: list[str], *, timeout: float
+    ) -> subprocess.CompletedProcess[str]:
+        """Run a read-only gcloud command, retrying failures that may be transient.
+
+        Reads race the scheduler's rewrites of scheduler_state.json (an object
+        being replaced can briefly return "not found: 404") and brief network or
+        auth blips; both clear within seconds. "Matched no objects" means the
+        object or prefix really does not exist, so it returns at once, as does a
+        timeout, which has already waited the full timeout.
+        """
+        result = self._run(cmd, check=False, timeout=timeout)
+        for delay in READ_RETRY_DELAYS_SECONDS:
+            if result.returncode in (0, 124) or _matched_nothing(result):
+                break
+            logger.debug(
+                "Retrying in %.0fs after exit %s (%s): %s",
+                delay,
+                result.returncode,
+                _error_detail(result),
+                " ".join(cmd),
+            )
+            time.sleep(delay)
+            result = self._run(cmd, check=False, timeout=timeout)
+        return result
 
     def create_queued_resource(
         self,
@@ -372,8 +417,15 @@ class GCPBackend(Backend):
         ]
         if name_prefix:
             cmd.append(f"--filter=name:{name_prefix}")
-        result = self._run(cmd, check=False, timeout=30)
+        result = self._run_read(cmd, timeout=30)
         if result.returncode != 0:
+            logger.warning(
+                "Failed to list queued resources in %s/%s (exit %s): %s",
+                project,
+                zone,
+                result.returncode,
+                _error_detail(result),
+            )
             return []
         return [line.rsplit("/", 1)[-1] for line in result.stdout.splitlines() if line]
 
@@ -396,12 +448,22 @@ class GCPBackend(Backend):
         ]
         if name_prefix:
             cmd.append(f"--filter=name:{name_prefix}")
-        result = self._run(cmd, check=False, timeout=30)
-        if result.returncode != 0 or not result.stdout.strip():
+        result = self._run_read(cmd, timeout=30)
+        if result.returncode != 0:
+            logger.warning(
+                "Failed to list TPU VMs in %s/%s (exit %s): %s",
+                project,
+                zone,
+                result.returncode,
+                _error_detail(result),
+            )
+            return []
+        if not result.stdout.strip():
             return []
         try:
             rows = json.loads(result.stdout)
         except json.JSONDecodeError:
+            logger.warning("Unparseable TPU VM list for %s/%s", project, zone)
             return []
         for row in rows:
             if "name" in row:
@@ -491,13 +553,17 @@ class GCPBackend(Backend):
             Path(keys_path).unlink(missing_ok=True)
 
     def read_gcs_result(self, url: str) -> GCSReadResult:
-        result = self._run(["gcloud", "storage", "cat", url], check=False, timeout=15)
+        result = self._run_read(["gcloud", "storage", "cat", url], timeout=15)
         if result.returncode == 0:
             return GCSReadResult(content=result.stdout, succeeded=True)
-        detail = f"{result.stderr}\n{result.stdout}".lower()
-        if "matched no objects or files" in detail:
+        if _matched_nothing(result):
             return GCSReadResult(content=None, succeeded=True)
-        logger.warning("Failed to read GCS object %s (exit %s)", url, result.returncode)
+        logger.warning(
+            "Failed to read GCS object %s (exit %s): %s",
+            url,
+            result.returncode,
+            _error_detail(result),
+        )
         return GCSReadResult(content=None, succeeded=False)
 
     def read_gcs(self, url: str) -> str | None:
@@ -516,8 +582,15 @@ class GCPBackend(Backend):
         return self._run(["gcloud", "storage", "ls", url], check=False, timeout=10).returncode == 0
 
     def list_gcs(self, prefix: str) -> list[str]:
-        result = self._run(["gcloud", "storage", "ls", prefix], check=False, timeout=15)
+        result = self._run_read(["gcloud", "storage", "ls", prefix], timeout=15)
         if result.returncode != 0:
+            if not _matched_nothing(result):
+                logger.warning(
+                    "Failed to list %s (exit %s): %s",
+                    prefix,
+                    result.returncode,
+                    _error_detail(result),
+                )
             return []
         return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
