@@ -1,6 +1,30 @@
 # Worklog
 
-## 2026-07-02 - Central Scheduler Service (Drop --focus-user)
+## 2026-10-31 - Retry GCS/TPU Reads; Warn Instead of Showing "(none)"
+
+Goal: `tpu list` printed "Queued jobs: (none)" and "Live TPU VMs: (none)"
+during a brief gcloud failure, with only `Failed to read GCS object
+.../scheduler_state.json (exit 1)` and no reason, so a live queue looked empty.
+
+Root causes:
+- The scheduler rewrites `scheduler_state.json` every ~60-70 s; a read that
+  lands mid-rewrite gets `not found: 404` (1 in 74 reads in a loop), which
+  `read_gcs_result` did not recognise as missing and reported as a failure.
+- `list_gcs`, `list_queued_resources` and `list_tpu_vms` returned `[]` on any
+  gcloud failure without logging, so a network/auth blip printed "(none)".
+- The read warning dropped gcloud's stderr, hiding the actual error.
+
+Changes (`queue/backend.py`):
+- New `GCPBackend._run_read` retries read-only gcloud calls twice (1 s, 2 s)
+  on a nonzero exit. "Matched no objects" (object/prefix really absent) and
+  timeouts (exit 124, already waited the full timeout) return at once, so the
+  scheduler's common missing-sentinel reads cost nothing extra.
+- `read_gcs_result`, `list_gcs`, `list_queued_resources`, `list_tpu_vms` use
+  it, and log a warning with gcloud's ERROR line when they still fail; an
+  empty GCS prefix stays a silent empty listing.
+- Tests: mid-rewrite 404 retried to success, persistent failure gives up after
+  3 tries and logs the gcloud error, missing object/timeout not retried, list
+  failures warn while an empty prefix does not.
 
 Goal: schedule every user's jobs, not only lzha's. zheng reported that jobs
 submitted today ran before priority-0 jobs from yesterday; the queue showed
